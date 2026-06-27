@@ -1,0 +1,17 @@
+{
+  "id": "STS2-BetterRockPaperScissors",
+  "name": "BetterRockPaperScissors",
+  "author": "EdwardSu",
+  "description": "Replaces the random rock-paper-scissors used when multiple players contest the same treasure relic with player-chosen gestures on a countdown, synced across multiplayer",
+  "version": "v0.1.0",
+  "has_pck": false,
+  "has_dll": true,
+  "affects_gameplay": true,
+  "dependencies": [
+    {
+      "id": "STS2-RitsuLib",
+      "min_version": "0.4.13"
+    }
+  ],
+  "min_game_version": "0.107.0"
+}
