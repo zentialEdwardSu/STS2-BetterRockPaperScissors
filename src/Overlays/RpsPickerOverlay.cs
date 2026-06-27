@@ -32,7 +32,7 @@ public sealed class RpsPickerView
     private const int TextureMargin = 48;    // 9-slice margin for the reward-panel art
     private const int IconMaxWidth = 240;     // displayed hand width inside the panel
     private const float ButtonMinWidth = 280f;
-    private const float ButtonMinHeight = 300f;
+    private const float ButtonMinHeight = 160f;
 
     private readonly TaskCompletionSource<RelicPickingFightMove?> _result =
         new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -131,7 +131,7 @@ public sealed class RpsPickerView
         // Reward-panel art as the button's own background (no border, no flat fill).
         ApplyButtonStyles(button);
 
-        Texture2D? icon = CropTopTwoThirds(handTexture);
+        Texture2D? icon = CropTopHalf(handTexture);
         if (icon != null)
         {
             // Only the upper 2/3 of the hand art, no label.
@@ -194,10 +194,11 @@ public sealed class RpsPickerView
     }
 
     /// <summary>
-    /// Returns an AtlasTexture exposing only the top 2/3 of <paramref name="source"/> (hands point
-    /// upward, so the wrist/lower third is dropped). Null if there's no source texture.
+    /// Returns an AtlasTexture exposing only the top half of <paramref name="source"/> (hands point
+    /// upward, so the wrist/lower half is dropped). Null if there's no source texture. The button
+    /// height is derived from this cropped height, so the panel background is cropped to match.
     /// </summary>
-    private static Texture2D? CropTopTwoThirds(Texture2D? source)
+    private static Texture2D? CropTopHalf(Texture2D? source)
     {
         if (source == null)
             return null;
@@ -208,7 +209,7 @@ public sealed class RpsPickerView
         return new AtlasTexture
         {
             Atlas = source,
-            Region = new Rect2(0f, 0f, width, height * 2f / 3f),
+            Region = new Rect2(0f, 0f, width, height / 2f),
             FilterClip = true,
         };
     }
