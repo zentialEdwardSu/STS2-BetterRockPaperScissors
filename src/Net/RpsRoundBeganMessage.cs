@@ -25,6 +25,9 @@ public struct RpsRoundBeganMessage : INetMessage, IPacketSerializable
     /// <summary>The host's countdown duration in seconds for this round.</summary>
     public byte countdownSeconds;
 
+    /// <summary>Host-authoritative re-choose setting: 1 if players may clear/re-choose, else 0.</summary>
+    public byte allowReset;
+
     public bool ShouldBroadcast => false; // sent by host directly to every peer
     public NetTransferMode Mode => NetTransferMode.Reliable;
     public LogLevel LogLevel => LogLevel.VeryDebug;
@@ -35,6 +38,7 @@ public struct RpsRoundBeganMessage : INetMessage, IPacketSerializable
         writer.WriteByte(this.relicKey);
         writer.WriteByte(this.round);
         writer.WriteByte(this.countdownSeconds);
+        writer.WriteByte(this.allowReset);
     }
 
     public void Deserialize(PacketReader reader)
@@ -42,8 +46,9 @@ public struct RpsRoundBeganMessage : INetMessage, IPacketSerializable
         this.relicKey = reader.ReadByte();
         this.round = reader.ReadByte();
         this.countdownSeconds = reader.ReadByte();
+        this.allowReset = reader.ReadByte();
     }
 
     public override string ToString() =>
-        $"{nameof(RpsRoundBeganMessage)} relic:{this.relicKey} round:{this.round} countdown:{this.countdownSeconds}";
+        $"{nameof(RpsRoundBeganMessage)} relic:{this.relicKey} round:{this.round} countdown:{this.countdownSeconds} allowReset:{this.allowReset}";
 }

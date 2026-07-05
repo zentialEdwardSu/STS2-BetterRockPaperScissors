@@ -41,7 +41,11 @@ public sealed class FightAnimator
     private readonly object _hands;            // NHandImageCollection
     private readonly Control _backstop;        // Control ("FightBackstop")
     private readonly IList _holders;            // List<NTreasureRoomRelicHolder>
+    private readonly IList _handList;           // NHandImageCollection._hands (List<NHandImage>)
     private readonly CancellationToken _token;
+
+    private Control _activeHolder;      // the relic holder pulled to center for the current fight
+    private bool _fightVisualsActive;   // true between BeginFight and GrabRelicForWinner
 
     private readonly MethodInfo _getHand;       // NHandImageCollection.GetHand(ulong) -> NHandImage
     private readonly MethodInfo _beforeFight;   // NHandImageCollection.BeforeFightStarted(List<Player>)
@@ -67,6 +71,7 @@ public sealed class FightAnimator
             _getHand = AccessTools.Method(handsType, "GetHand");
             _beforeFight = AccessTools.Method(handsType, "BeforeFightStarted");
             _beforeAwarded = AccessTools.Method(handsType, "BeforeRelicsAwarded");
+            _handList = AccessTools.Field(handsType, "_hands")?.GetValue(_hands) as IList;
         }
 
         Type handType = AccessTools.TypeByName(
@@ -79,10 +84,39 @@ public sealed class FightAnimator
             _setIsInFight = AccessTools.Method(handType, "SetIsInFight");
         }
 
-        Available = _hands != null && _backstop != null && _holders != null
+        Available = _hands != null && _backstop != null && _holders != null && _handList != null
                     && _getHand != null && _beforeFight != null && _beforeAwarded != null
                     && _doFightMove != null && _doLoseShake != null && _grabRelic != null
                     && _setIsInFight != null;
+    }
+
+    /// <summary>
+    /// Hides every hand that isn't a fighter in the current fight, so the other fights' frozen hands
+    /// don't linger near screen center during this fight's (lengthy, interactive) picking phase.
+    /// Uses Node.Visible directly: stock UpdateHandVisibility only toggles the internal IsShown flag +
+    /// tween target and never touches Visible, so this stays hidden even if it re-runs mid-pick.
+    /// </summary>
+    public void ShowOnlyFighters(List<Player> fighters)
+    {
+        if (!Available)
+            return;
+        foreach (object hand in _handList)
+        {
+            if (hand is NHandImage h)
+                h.Visible = fighters.Contains(h.Player);
+        }
+    }
+
+    /// <summary>Re-show all hands (undoes <see cref="ShowOnlyFighters"/>) for the stock award wrap-up.</summary>
+    public void RestoreAllHands()
+    {
+        if (!Available)
+            return;
+        foreach (object hand in _handList)
+        {
+            if (hand is NHandImage h)
+                h.Visible = true;
+        }
     }
 
     /// <summary>
@@ -119,6 +153,8 @@ public sealed class FightAnimator
 
         holderControl.ZIndex = 1;
         _backstop.Visible = true;
+        _activeHolder = holderControl;
+        _fightVisualsActive = true;
 
         Vector2 target = (_backstop.Size - holderControl.Size) * 0.5f;
         Tween tween = holderControl.CreateTween();
@@ -127,6 +163,7 @@ public sealed class FightAnimator
         tween.TweenProperty(_backstop, "modulate:a", 1f, 0.25);
 
         _beforeFight.Invoke(_hands, new object[] { fighters });
+        ShowOnlyFighters(fighters); // hide the other fights' frozen hands (the stray "third finger")
 
         await tween.AwaitFinished(_token);
         await Cmd.Wait(1f, _token);
@@ -202,6 +239,8 @@ public sealed class FightAnimator
         await tween.AwaitFinished(_token);
         _backstop.Visible = false;
         holderControl.ZIndex = 0;
+        _fightVisualsActive = false;
+        _activeHolder = null;
 
         foreach (Player p in fighters)
         {
@@ -209,6 +248,22 @@ public sealed class FightAnimator
             if (hand != null)
                 _setIsInFight.Invoke(hand, new object[] { false });
         }
+    }
+
+    /// <summary>
+    /// Keep the raised fight visuals (backstop + the relic holder pulled to center, both at raised
+    /// z-index) hidden while the game is paused, so they don't draw over the pause/ESC menu during the
+    /// mod's long interactive pick window. Called from the per-frame countdown loops; no-op outside a
+    /// fight. Restores visibility on resume.
+    /// </summary>
+    public void SyncPauseVisibility()
+    {
+        if (!Available || !_fightVisualsActive)
+            return;
+        bool paused = RunManager.Instance.IsPaused;
+        _backstop.Visible = !paused;
+        if (GodotObject.IsInstanceValid(_activeHolder))
+            _activeHolder.Visible = !paused;
     }
 
     /// <summary>

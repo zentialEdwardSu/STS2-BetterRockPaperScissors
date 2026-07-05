@@ -21,8 +21,8 @@ public static class RpsNetHub
     // Host->client resolved rounds. Clients await these; the host fills them locally too.
     private static readonly Dictionary<(byte relic, byte round), TaskCompletionSource<List<byte>>> _resolvedRounds = new();
 
-    // Host->client round-begin announcements (carry the host-authoritative countdown).
-    private static readonly Dictionary<(byte relic, byte round), TaskCompletionSource<byte>> _roundBegan = new();
+    // Host->client round-begin announcements (carry the host-authoritative countdown + re-choose flag).
+    private static readonly Dictionary<(byte relic, byte round), TaskCompletionSource<(byte countdown, bool allowReset)>> _roundBegan = new();
 
     // The host's net id, learned from the sender of any host->client message. Lets a client query
     // its latency to the host so it can phase-align its (cosmetic) countdown bar.
@@ -62,7 +62,7 @@ public static class RpsNetHub
             tcs.TrySetResult(null);
         _resolvedRounds.Clear();
         foreach (var tcs in _roundBegan.Values)
-            tcs.TrySetResult(0);
+            tcs.TrySetResult((0, false));
         _roundBegan.Clear();
         Entry.Logger.Info("[RPS net] handlers unregistered");
     }
@@ -101,24 +101,26 @@ public static class RpsNetHub
     }
 
     /// <summary>Host: announces a round start and its authoritative countdown to every peer.</summary>
-    public static void BroadcastRoundBegan(byte relicKey, byte round, byte countdownSeconds)
+    public static void BroadcastRoundBegan(byte relicKey, byte round, byte countdownSeconds, bool allowReset)
     {
         Entry.Logger.Info(
-            $"[RPS net] host broadcasting round-began: relic {relicKey} round {round} countdown {countdownSeconds}s");
+            $"[RPS net] host broadcasting round-began: relic {relicKey} round {round} countdown {countdownSeconds}s allowReset {allowReset}");
         Net.SendMessage(new RpsRoundBeganMessage
         {
             relicKey = relicKey,
             round = round,
             countdownSeconds = countdownSeconds,
+            allowReset = (byte)(allowReset ? 1 : 0),
         });
     }
 
     private static void OnRoundBegan(RpsRoundBeganMessage message, ulong senderId)
     {
         _hostId = senderId;
+        bool allowReset = message.allowReset != 0;
         Entry.Logger.Info(
-            $"[RPS net] client received round-began: relic {message.relicKey} round {message.round} countdown {message.countdownSeconds}s");
-        GetOrCreateBegan(message.relicKey, message.round).TrySetResult(message.countdownSeconds);
+            $"[RPS net] client received round-began: relic {message.relicKey} round {message.round} countdown {message.countdownSeconds}s allowReset {allowReset}");
+        GetOrCreateBegan(message.relicKey, message.round).TrySetResult((message.countdownSeconds, allowReset));
     }
 
     /// <summary>
@@ -140,18 +142,21 @@ public static class RpsNetHub
         return oneWay;
     }
 
-    /// <summary>Client: awaits the host's round-begin announcement; result is the countdown seconds.</summary>
-    public static Task<byte> AwaitRoundBegan(byte relicKey, byte round)
+    /// <summary>
+    /// Client: awaits the host's round-begin announcement; result is the countdown seconds plus the
+    /// host's re-choose (reset) setting for this round.
+    /// </summary>
+    public static Task<(byte countdown, bool allowReset)> AwaitRoundBegan(byte relicKey, byte round)
     {
         return GetOrCreateBegan(relicKey, round).Task;
     }
 
-    private static TaskCompletionSource<byte> GetOrCreateBegan(byte relicKey, byte round)
+    private static TaskCompletionSource<(byte countdown, bool allowReset)> GetOrCreateBegan(byte relicKey, byte round)
     {
         var key = (relicKey, round);
         if (!_roundBegan.TryGetValue(key, out var tcs))
         {
-            tcs = new TaskCompletionSource<byte>(TaskCreationOptions.RunContinuationsAsynchronously);
+            tcs = new TaskCompletionSource<(byte countdown, bool allowReset)>(TaskCreationOptions.RunContinuationsAsynchronously);
             _roundBegan[key] = tcs;
         }
         return tcs;

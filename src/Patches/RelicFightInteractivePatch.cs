@@ -92,6 +92,11 @@ public static class RelicFightInteractivePatch
                         result, key, overlayParent, animator, cts.Token);
                 }
 
+                // Fights hid non-participant hands one fight at a time; re-show them all so the stock
+                // end-of-awards path (and any single-voter/consolation animation) isn't left with
+                // hidden hands.
+                animator.RestoreAllHands();
+
                 // Fight winners may have changed vs. the RNG outcome the game used to assign
                 // consolation/skip relics. Recompute those so a flipped winner doesn't also keep the
                 // consolation relic that was originally handed to the (then-)loser.

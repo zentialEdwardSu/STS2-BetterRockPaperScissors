@@ -17,11 +17,13 @@ public static class ModConfig
     private const int MinCountdownSeconds = 1;
     private const int DefaultCountdownSeconds = 3;
     private const int MaxCountdownSeconds = 30;
+    private const bool DefaultAllowReset = false;
 
     /// <summary>The serialized config model. Kept tiny on purpose.</summary>
     private class Data
     {
         public int CountdownSeconds = DefaultCountdownSeconds;
+        public bool AllowReset = DefaultAllowReset;
     }
 
     /// <summary>Countdown in seconds before a move is auto-picked, clamped to the valid range.</summary>
@@ -35,6 +37,14 @@ public static class ModConfig
             return value;
         }
     }
+
+    /// <summary>
+    /// Host-authoritative: when true, players can clear/re-choose their gesture (a reset button is
+    /// shown) and the round always rides the full countdown so there's time to re-choose. When false,
+    /// a pick is final and the round resolves as soon as every survivor has picked. Clients follow the
+    /// host's value (carried on the round-began message), not their own.
+    /// </summary>
+    public static bool AllowReset => Store.Get<Data>(DataKey).AllowReset;
 
     private static ModDataStore Store => RitsuLibFramework.GetDataStore(Entry.ModId);
 
@@ -65,6 +75,16 @@ public static class ModConfig
                         () => Store.Save(DataKey)),
                     MinCountdownSeconds,
                     MaxCountdownSeconds,
-                    1)));
+                    1)
+                .AddToggle(
+                    "allow_reset",
+                    ModSettingsText.Literal("Allow re-choosing (host only; always uses full countdown)"),
+                    new ModSettingsCallbackValueBinding<bool>(
+                        Entry.ModId,
+                        "allow_reset",
+                        SaveScope.Global,
+                        () => Store.Get<Data>(DataKey).AllowReset,
+                        value => Store.Get<Data>(DataKey).AllowReset = value,
+                        () => Store.Save(DataKey)))));
     }
 }
