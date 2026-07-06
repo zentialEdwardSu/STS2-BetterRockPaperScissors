@@ -260,7 +260,7 @@ public sealed class FightAnimator
     {
         if (!Available || !_fightVisualsActive)
             return;
-        bool paused = RunManager.Instance.IsPaused;
+        bool paused = GamePauseState.IsMenuOpen;
         _backstop.Visible = !paused;
         if (GodotObject.IsInstanceValid(_activeHolder))
             _activeHolder.Visible = !paused;

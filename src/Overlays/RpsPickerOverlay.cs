@@ -44,7 +44,7 @@ public sealed class RpsPickerView
     private readonly TaskCompletionSource<RelicPickingFightMove?> _result =
         new(TaskCreationOptions.RunContinuationsAsynchronously);
 
-    private static readonly Color ResetGlyphColor = new(0.953f, 0.882f, 0.663f); // #f3e1a9
+    private static readonly Color ResetGlyphColor = new(0.992f, 0.925f, 0.796f); // #fdeccb
 
     private readonly Button[] _buttons = new Button[3]; // indexed by (int)RelicPickingFightMove
     private readonly ProgressBar _countdownBar;
@@ -281,6 +281,20 @@ public sealed class RpsPickerView
     }
 
     /// <summary>
+    /// Hide the whole picker while a menu (ESC/pause, settings, ...) covers the run, and re-show it on
+    /// resume. The picker sits at max ZIndex so it stays above the fight backstop, which also means it
+    /// would otherwise draw over the pause menu (that menu is a game-logic pause, not a scene-tree pause,
+    /// so it shares this canvas layer). Called every frame from the resolver loop, INCLUDING while paused
+    /// (SetRemaining is skipped during the pause freeze), so visibility must live here, not there.
+    /// </summary>
+    public void SyncPauseVisibility()
+    {
+        if (_closed)
+            return;
+        _root.Visible = !GamePauseState.IsMenuOpen;
+    }
+
+    /// <summary>
     /// Updates the countdown progress bar. <paramref name="total"/> is the full countdown so the bar
     /// can show a fraction and lerp its fill color green→red as time runs out. Driven by the
     /// resolver's per-frame loop. Keeps ticking after a pick (the chosen hand + bar stay on screen
@@ -290,10 +304,6 @@ public sealed class RpsPickerView
     {
         if (_closed)
             return;
-        // The picker sits at max ZIndex so it stays above the fight backstop, which also means it would
-        // otherwise draw over the pause/ESC menu (that menu uses a game-logic pause, not a scene-tree
-        // pause, so it shares this canvas layer). Hide the whole overlay while the game is paused.
-        _root.Visible = !RunManager.Instance.IsPaused;
         double fraction = total > 0.0 ? Math.Clamp(seconds / total, 0.0, 1.0) : 0.0;
         _countdownBar.Value = fraction;
         _countdownFill.BgColor = CountdownEmpty.Lerp(CountdownFull, (float)fraction);

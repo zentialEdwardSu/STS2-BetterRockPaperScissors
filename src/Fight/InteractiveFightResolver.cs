@@ -271,21 +271,25 @@ public static class InteractiveFightResolver
 
         while (remaining > 0.0)
         {
-            // Without re-choosing, a completed pick is final — end the round as soon as everyone's in.
-            if (!allowReset
-                && AllSurvivorsReady(relicKey, round, fighters, survivors, localIndex, realMultiplayer, overlay))
-                return;
-
             if (tree == null)
             {
                 await Task.Delay((int)(remaining * 1000));
                 return;
             }
 
+            // Without re-choosing, a completed pick is final — end the round as soon as everyone's in.
+            if (!allowReset
+                && AllSurvivorsReady(relicKey, round, fighters, survivors, localIndex, realMultiplayer, overlay))
+                return;
+
             await tree.ToSignal(tree, SceneTree.SignalName.ProcessFrame);
             remaining -= tree.Root.GetProcessDeltaTime();
             overlay?.SetRemaining(remaining, countdownSeconds);
-            animator?.SyncPauseVisibility(); // hide the raised fight visuals while the ESC menu is up
+            // The ESC menu is a game-logic pause, not a scene-tree pause, so the countdown keeps draining
+            // (correct: the host's authoritative timer never stops, so freezing locally would desync).
+            // Just hide the raised fight visuals + picker while a menu covers them, and restore on resume.
+            animator?.SyncPauseVisibility();
+            overlay?.SyncPauseVisibility();
         }
     }
 
@@ -375,7 +379,10 @@ public static class InteractiveFightResolver
             await tree.ToSignal(tree, SceneTree.SignalName.ProcessFrame);
             remaining -= tree.Root.GetProcessDeltaTime();
             overlay.SetRemaining(remaining, countdownSeconds);
-            animator?.SyncPauseVisibility(); // hide the raised fight visuals while the ESC menu is up
+            // Countdown keeps draining while a menu is open (stays in sync with the host); just hide and
+            // restore the raised fight visuals + picker. See RunAuthoritativeCountdown.
+            animator?.SyncPauseVisibility();
+            overlay.SyncPauseVisibility();
         }
 
         // Catch a pick/re-choose that landed on the final frame before the loop ended.

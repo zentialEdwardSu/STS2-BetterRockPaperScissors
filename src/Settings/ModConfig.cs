@@ -18,12 +18,14 @@ public static class ModConfig
     private const int DefaultCountdownSeconds = 3;
     private const int MaxCountdownSeconds = 30;
     private const bool DefaultAllowReset = false;
+    private const bool DefaultRestoreHandsOnResume = false;
 
     /// <summary>The serialized config model. Kept tiny on purpose.</summary>
     private class Data
     {
         public int CountdownSeconds = DefaultCountdownSeconds;
         public bool AllowReset = DefaultAllowReset;
+        public bool RestoreHandsOnResume = DefaultRestoreHandsOnResume;
     }
 
     /// <summary>Countdown in seconds before a move is auto-picked, clamped to the valid range.</summary>
@@ -45,6 +47,16 @@ public static class ModConfig
     /// host's value (carried on the round-began message), not their own.
     /// </summary>
     public static bool AllowReset => Store.Get<Data>(DataKey).AllowReset;
+
+    /// <summary>
+    /// When true, the mod reseats each frozen fighter hand's resting position when the pause/ESC menu
+    /// closes, so a hand that retracted off-screen while paused animates back on-screen. This works
+    /// around a bug in the STABLE game branch where <c>NHandImage.AnimateIn</c> re-runs the slide-in
+    /// tween but never restores a frozen hand's target position, so the pauser's hand stays off-screen
+    /// until the relic grab. The BETA branch already fixes this in-engine, so leave this OFF on beta to
+    /// avoid fighting the game's own restore. Local/cosmetic only — never touched on non-fighter peers.
+    /// </summary>
+    public static bool RestoreHandsOnResume => Store.Get<Data>(DataKey).RestoreHandsOnResume;
 
     private static ModDataStore Store => RitsuLibFramework.GetDataStore(Entry.ModId);
 
@@ -85,6 +97,16 @@ public static class ModConfig
                         SaveScope.Global,
                         () => Store.Get<Data>(DataKey).AllowReset,
                         value => Store.Get<Data>(DataKey).AllowReset = value,
+                        () => Store.Save(DataKey)))
+                .AddToggle(
+                    "restore_hands_on_resume",
+                    ModSettingsText.Literal("Fix pause-hidden hands (stable branch only; turn off on beta)"),
+                    new ModSettingsCallbackValueBinding<bool>(
+                        Entry.ModId,
+                        "restore_hands_on_resume",
+                        SaveScope.Global,
+                        () => Store.Get<Data>(DataKey).RestoreHandsOnResume,
+                        value => Store.Get<Data>(DataKey).RestoreHandsOnResume = value,
                         () => Store.Save(DataKey)))));
     }
 }
