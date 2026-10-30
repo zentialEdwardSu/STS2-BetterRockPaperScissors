@@ -1,67 +1,47 @@
 兼容性: [b]正式版与 beta版(v0.111.0)[/b]
-Compatibility: [b]stable and public-beta-v0.111.0[/b]
+Compatibility: [b]stable and  public-beta-v0.111.0[/b]
 
 为多人模式增加更多的对抗性！（bushi）
 
-这个mod把手动出拳从“抢遗物”扩展到多人模式里所有需要随机裁决的“投票冲突”：猜拳不再由系统随机生成，改由玩家自己在倒计时内出拳决定。
+这个mod将多人模式的随机裁决替换为带有倒计时的手动出拳：争抢同一件遗物时的随机猜拳，以及选择路径、共享事件中选项投票出现分歧时的轮盘赌，都会改为由玩家自己出石头剪刀还是布，在倒计时结束后未选择则会仍然随机出拳。
 
-[b]它替换了三处随机裁决：[/b]
-[olist]
-[*] 多人争抢同一件遗物 → 带倒计时的手动出拳（原mod的功能）
-[*] 选地图路径时投票不一致 → 不再用轮盘赌随机点一个人，改由手动石头剪刀布决定走哪条路
-[*] 共享事件里选项投票不一致 → 同样改由手动石头剪刀布决定选哪个选项
-[/olist]
+A Slay the Spire 2 mod that replaces the random rolls of multiplayer — the rock-paper-scissors used when multiple players contest the same treasure relic, and the roulette used when votes for a map path or a shared event option are split — with player-chosen gestures on a countdown, if no hand is chosen by the end of the countdown, the hand will still be randomly generated.
 
-两处新增的冲突替换可以在[b]主机端[/b]的 RitsuLib 设置页里分别开关，默认开启；关闭后恢复原版轮盘赌。
+倒计时时长可以在主机端的RitsuLib设置页面修改。
 
-[b]怎么打：[/b]按“边”淘汰。一轮里恰好出现两种手势时，被克制的一方出局；只要剩下的玩家都属于同一个选项/同一条路径，这一边就获胜并立刻结束——不会为了让同侧玩家分出一个“最后的人”而反复猜拳。
+Duration of countdown can be sat in Host‘s RitsuLib's settings page.
 
-[b]表现：[/b]选拳时每位玩家的手指手从屏幕边缘伸入、指向屏幕中心，选择面板叠在手的上方；出拳时手臂绕臂根连摇三次（0.5s / 0.4s / 0.2s，越来越快），摇完变成实际出的手势，猜错的手抖动后消失。地图冲突结束后，获胜侧所有玩家的头像放大、其余淡出约 1 秒，随后直接进入获胜侧所投的房间；原版轮盘赌动画不会再出现（共享事件冲突同理，结束后直接高亮被选中的选项、其余置灰）。
+可以在主机端的RitsuLib设置页面激活可重选手势选项，在可重选激活手势后，结算将仅在倒计时结束后进行（未激活时在所有玩家都选择了手势时也会进行结算），在倒计时期间，玩家可以点击所选手势正下方的复位按钮以重选。
 
-倒计时时长、以及“可重选手势”选项，都在主机端的 RitsuLib 设置页修改，对遗物出拳与冲突出拳同时生效；设置页支持中英文，会跟随游戏语言切换。
+The reselectable gesture option can be activated in the RitsuLib settings page on the console. After the reselectable gesture is activated, the results will only be calculated after the countdown ends (if it is not activated, the results will also be calculated when all players have selected a gesture). During the countdown, players can click the reset button directly below the selected gesture to reselect.
 
-A Slay the Spire 2 mod that extends manual gestures from relic fights to every multiplayer “vote conflict” that the game would otherwise settle at random.
+选路与共享事件的手动出拳可以在主机端的RitsuLib设置页面分别开关（默认开启），关闭后该冲突恢复为原版轮盘赌。
 
-[b]It replaces three random rolls:[/b]
-[olist]
-[*] Multiple players contesting the same treasure relic → manual gestures on a countdown (the mod's original feature)
-[*] Players voting for different map coordinates → manual rock-paper-scissors decides which path the party takes, instead of the roulette
-[*] Players voting for different options in a shared event → manual rock-paper-scissors decides which option runs
-[/olist]
-
-The two new conflict replacements are toggled separately in the [b]host's[/b] RitsuLib settings page and are on by default; turning one off restores the vanilla roulette for it.
-
-[b]How a fight works:[/b] elimination by side. A round only eliminates anyone when exactly two distinct gestures are present — everyone who threw the beaten gesture is out. As soon as every remaining player is on the same coordinate/option, that side wins and the fight ends, so players on the winning side never have to play each other just to produce a single “last one standing”.
-
-[b]Presentation:[/b] while choosing, each player's pointing hand reaches in from the edge of the screen towards the centre and the picker panel sits on top of the hands; when the round resolves, each arm swings three times around its root (0.5s / 0.4s / 0.2s, accelerating) and then switches to the gesture it played, while the hands that lost shake and fade away. After a map conflict the winning side's HUD avatars grow and the others fade for about a second, then the party travels to the winning side's room — the vanilla roulette is never replayed (same for shared events, where the winning option is highlighted and the others grey out).
-
-The countdown length and the “re-choose” option live in the host's RitsuLib settings page and apply to both relic fights and conflict fights. The settings page is available in English and Simplified Chinese and follows the game's language.
+Manual rock-paper-scissors for map-path conflicts and for shared-event option conflicts can be toggled separately in the host's RitsuLib settings page (both on by default); turning one off restores the vanilla roulette for it.
 
 [h2] 修改日志 Change Logs [/h2]
 
 [h3]v0.2.0[/h3]
 
 [b]经过测试模组在正式版与beta分支(v0.111.0)可以运行[/b]，本版本的主要修改如下：
-[b]After testing, the mod works on both the stable version and the beta branch (v0.111.0).[/b] The main changes in this version are as follows:
-
+[b]After testing, the module can run in both the official version and the beta branch (v0.111.0).[/b] The main changes in this version are as follows:
 [olist]
-[*] 新增：多人模式的地图路径投票分歧、共享事件选项投票分歧不再使用轮盘赌，改由手动石头剪刀布按“获胜边”决定（两个功能可在主机端 RitsuLib 设置页分别开关，默认开启）
-[*] 新增：胜负判定改为“获胜边”——所有存活玩家同属一侧即刻结束，不再为了选出唯一胜者而让同侧玩家继续对局
-[*] 新增：出拳动画。选拳时显示遗物式的手指手并从屏幕边缘伸入，选择面板叠在手的上方；结算时手臂绕臂根加速摇动三次（0.5s / 0.4s / 0.2s）后切换为实际手势，本轮被淘汰的手抖动后淡出
-[*] 新增：地图冲突结束的揭示动画——获胜侧所有玩家头像放大、其余淡出，然后进入获胜侧所投房间；并且[b]彻底不再播放原版轮盘赌动画[/b]（共享事件冲突同样不再播放，结束后保留原版“被选选项高亮 + 其余置灰”）
-[*] 新增：设置页中英文本地化，跟随游戏语言自动切换（RitsuLib I18N，翻译表内嵌于 DLL）
-[*] 兼容性：保持同一份 DLL 同时支持正式版与 beta 分支
+ [*] 新增：选路与共享事件的投票分歧不再使用轮盘赌，改为手动石头剪刀布，并按获胜方所投的路径/选项结算（两个功能可在主机端分别开关）。
+ [*] 胜负判定改为“获胜边”：只要剩下的玩家都属于同一侧就立即结束，不再为了让同侧玩家决出唯一胜者而反复猜拳。
+ [*] 新增出拳动画：选拳时手指手从屏幕边缘伸入、选择面板叠在手的上方；结算时手臂绕臂根加速摇动三次（0.5s / 0.4s / 0.2s）后变为实际出的手势，猜错的手抖动后消失。
+ [*] 地图冲突结束后，获胜侧所有玩家的头像放大、其余淡出，随后直接进入获胜侧所投的房间，原版轮盘赌动画不再播放（共享事件冲突同样不播放，结束后保留原版的“选项高亮 + 其余置灰”）。
+ [*] 设置页支持中英文，随游戏语言自动切换。
 [/olist]
 
-[b]The mod works on both branches (v0.111.0).[/b] The main changes in this version are as follows:
+[b]The mod has been tested and works on the beta branch[/b]. The main changes in this version are as follows:
 
 [olist]
-[*] New: split votes on the map and in shared events no longer use the roulette — a manual rock-paper-scissors fight decides the winning side (each replacement can be toggled separately in the host's RitsuLib settings, on by default).
-[*] New: the fight is decided by the winning side. The moment every remaining player is on the same side it ends, so players on the same side never keep fighting each other just to crown a single winner.
-[*] New: throw animation. While choosing, the relic-style pointing hands reach in from the screen edges with the picker on top; on resolution each arm swings three times around its root (0.5s / 0.4s / 0.2s, accelerating) and then switches to the played gesture, while the hands eliminated this round shake and fade out.
-[*] New: after a map conflict the winning side's avatars grow and the others fade, then the party travels to the winning side's room; the vanilla roulette is [b]never replayed[/b] (same for shared events, which keep the vanilla “chosen option highlighted, others greyed out” ending).
-[*] New: the settings page is localized in English and Simplified Chinese and follows the game's language (RitsuLib I18N, tables embedded in the DLL).
-[*] Compatibility: the same DLL keeps working on both the stable version and the beta branch.
+
+[*] New: split votes when choosing a path or a shared event option no longer use the roulette; a manual rock-paper-scissors decides by the winning side's coordinate/option (both replacements can be toggled separately on the host side).
+[*] The fight is decided by the winning side: it ends as soon as every remaining player is on the same side, so players on the same side no longer keep playing each other to crown a single winner.
+[*] New throw animation: while choosing, the pointing hands reach in from the screen edges with the picker on top; on resolution each arm swings three times around its root (0.5s / 0.4s / 0.2s, accelerating) and then switches to the played gesture, while the hands that guessed wrong shake and fade out.
+[*] After a map conflict the winning side's avatars grow and the others fade, then the party travels to the winning side's room, and the vanilla roulette is no longer played (shared-event conflicts keep their vanilla “chosen option highlighted, others greyed out” ending).
+[*] The settings page is available in English and Simplified Chinese and follows the game's language.
 [/olist]
 
 [h3]v0.1.1[/h3]
