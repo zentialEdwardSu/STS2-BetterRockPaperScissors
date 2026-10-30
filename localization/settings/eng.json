@@ -1,0 +1,8 @@
+{
+  "settings.title": "Better Rock Paper Scissors",
+  "settings.countdown.label": "Gesture countdown (seconds)",
+  "settings.allow_reset.label": "Allow re-choosing (host only; always uses full countdown)",
+  "settings.restore_hands.label": "Fix pause-hidden hands (stable branch only; turn off on beta)",
+  "settings.map_conflict.label": "Manual RPS for map path conflicts (host only)",
+  "settings.event_conflict.label": "Manual RPS for shared event option conflicts (host only)"
+}
