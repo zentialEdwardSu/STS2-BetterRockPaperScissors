@@ -16,3 +16,4 @@ local.props
 *.DotSettings.user
 bin/ModUploader
 *.log
+.dsh/
