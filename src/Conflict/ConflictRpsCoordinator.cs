@@ -1,6 +1,4 @@
-using Godot;
 using MegaCrit.Sts2.Core.Map;
-using MegaCrit.Sts2.Core.Nodes.Screens.Map;
 using STS2BetterRockPaperScissors.Net;
 
 namespace STS2BetterRockPaperScissors.Conflict;
@@ -117,44 +115,21 @@ internal static class ConflictRpsCoordinator
     }
 
     /// <summary>
-    /// Map seam: claims the right to skip the stock split-vote roulette for <paramref name="coord"/>. The stock
-    /// wheel highlights a *random* voter, so it must never be replayed once the mod has decided the fight: it
-    /// would point at the wrong player.
-    ///
-    /// Two ways to claim:
-    /// 1. the session is decided and its winning coordinate is exactly this travel — hand the caller the 1s
-    ///    winner reveal to await;
-    /// 2. the mod owns this conflict (toggle on for the host, or we are a client of such a host) and the votes
-    ///    really were split, but this peer's session state is missing or already consumed — suppress the wheel and
-    ///    let the travel continue with no animation rather than show a misleading one.
+    /// Replaces the roulette when a completed RPS session chose this map coordinate.
     /// </summary>
     internal static bool TryClaimMapSkip(MapCoord coord, out Task reveal)
     {
         reveal = Task.CompletedTask;
         ConflictRpsSession? session = _current;
 
-        if (session is { Kind: ConflictKind.MapPath, Status: ConflictSessionStatus.Decided, SkipConsumed: false }
-            && session.WinnerSide != ConflictRpsSession.NoSide)
-        {
-            if (MapConflictAdapter.UnpackCoord(session.WinnerSide) == coord)
-            {
-                session.SkipConsumed = true;
-                reveal = _revealTask;
-                Entry.Logger.Info($"[conflict] suppressing stock map split-vote roulette, travelling to {coord}");
-                return true;
-            }
-        }
-
-        if (session is { SkipConsumed: true })
+        if (session is not { Kind: ConflictKind.MapPath, Status: ConflictSessionStatus.Decided, SkipConsumed: false }
+            || session.WinnerSide == ConflictRpsSession.NoSide
+            || MapConflictAdapter.UnpackCoord(session.WinnerSide) != coord)
             return false;
 
-        if (!ConflictRpsGate.CanSuppressStockAnimation(ConflictKind.MapPath) || !MapVotesWereSplit())
-            return false;
-
-        if (session != null)
-            session.SkipConsumed = true;
-        Entry.Logger.Warn(
-            $"[conflict] suppressing the stock map roulette for {coord} without the winner reveal: session {(session == null ? "missing" : session.Status.ToString())}");
+        session.SkipConsumed = true;
+        reveal = _revealTask;
+        Entry.Logger.Info($"[conflict] suppressing stock map split-vote roulette, travelling to {coord}");
         return true;
     }
 
@@ -168,48 +143,6 @@ internal static class ConflictRpsCoordinator
         session.SkipConsumed = true;
         Entry.Logger.Info("[conflict] suppressing stock event split-vote roulette");
         return true;
-    }
-
-    /// <summary>
-    /// True when the map screen currently holds split votes. Used by the defensive suppression path: the stock
-    /// wheel is only ever played for a split vote, so a split vote on a modded host means any wheel would be
-    /// misleading.
-    /// </summary>
-    private static bool MapVotesWereSplit()
-    {
-        NMapScreen? screen = NMapScreen.Instance;
-        if (screen == null || !GodotObject.IsInstanceValid(screen))
-            return false;
-
-        try
-        {
-            int distinct = 0;
-            MapCoord? first = null;
-            foreach (MapCoord? vote in screen.PlayerVoteDictionary.Values)
-            {
-                if (!vote.HasValue)
-                    continue;
-                if (first == null)
-                {
-                    first = vote;
-                    distinct = 1;
-                    continue;
-                }
-
-                if (vote.Value != first.Value)
-                {
-                    distinct = 2;
-                    break;
-                }
-            }
-
-            return distinct > 1;
-        }
-        catch (Exception e)
-        {
-            Entry.Logger.Warn($"[conflict] could not inspect map votes: {e.Message}");
-            return false;
-        }
     }
 
     /// <summary>

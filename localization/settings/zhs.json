@@ -2,7 +2,7 @@
   "settings.title": "更好的石头剪刀布",
   "settings.countdown.label": "出拳倒计时（秒）",
   "settings.allow_reset.label": "允许重新选择（仅房主；始终使用完整倒计时）",
-  "settings.restore_hands.label": "修复暂停后隐藏的手（仅稳定分支；使用 beta 时请关闭）",
+  "settings.restore_hands.label": "修复暂停后消失的遗物争抢手部（本地）",
   "settings.map_conflict.label": "地图路径冲突改用手动石头剪刀布（仅房主）",
   "settings.event_conflict.label": "共享事件选项冲突改用手动石头剪刀布（仅房主）"
 }

@@ -9,8 +9,8 @@ Three decisions are replaced:
 | Vanilla decision | Replaced with | Toggle |
 | --- | --- | --- |
 | Multiple players contest the same treasure relic (random RPS) | manual gestures, one elimination round at a time | always on |
-| Players vote for different map coordinates (roulette picks a random voter) | manual RPS; the **winning side's coordinate** is where the party travels | `map_conflict_rps` (host, default on) |
-| Players vote for different options in a shared event (roulette) | manual RPS; the **winning side's option** is executed | `event_conflict_rps` (host, default on) |
+| Players vote for different map coordinates (roulette picks a random voter) | manual RPS; the **winning side's coordinate** is where the party travels | `map_conflict_rps` (host, default off) |
+| Players vote for different options in a shared event (roulette) | manual RPS; the **winning side's option** is executed | `event_conflict_rps` (host, default off) |
 
 The settings page is localized in English and Simplified Chinese and follows the game's language.
 
@@ -30,11 +30,11 @@ behavior instead of throwing.
 
 #### Treasure relic fights
 
-1. `NTreasureRoomRelicCollection.OnRelicsAwarded(List<RelicPickingResult>)`
+1. `NTreasureRoomRelicCollection.OnRelicsAwarded`
 
    1. kind: **Prefix returning `false`** (suppresses the original)
    2. Source: `Patches/RelicFightInteractivePatch.cs` 
-   3. Purpose: Intercepts relic awarding. Runs the interactive RPS resolver over every `FoughtOver` result, rewrites each fight's moves/winner, recomputes consolation/skip relics, then re-invokes the private `AnimateRelicAwards` so the rest of the stock award flow still runs. Falls back to letting the original run untouched on any error. 
+   3. Runs interactive RPS for contested relics and recomputes consolation prizes. The matching `AnimateRelicAwards` overload handles the remaining awards and completes the room. If a fight animation fails, the game replays and awards that fight using the synced moves.
 
 2. `NHandImageCollection.UpdateHandVisibility()` 
 
@@ -46,17 +46,9 @@ behavior instead of throwing.
 
       (`NGame.Instance.CursorManager.SetCursorShown(true)`). Stock hides the cursor for the whole `SharedRelicPicking` screen and re-runs on every input change, which would hide the cursor needed to click a gesture. Still respects controller mode, so controller players are unaffected. |
 
-3. `NHandImage.AnimateIn()`
-
-   1. kind: **Postfix**
-
-   2. Source: `Patches/HandRestoreOnResumePatch.cs`
-
-   3. Purpose: Works around a **stable-branch** bug where a fighter hand that retracted off-screen while a player had the pause/ESC menu open never returns. When the menu closes the hand animates back in, but stock `AnimateIn` on stable never restores a frozen hand's target position, so it slides toward the stale off-screen point. In real multiplayer this is driven by each peer's own screen state, so a *remote* player's paused hand stays hidden on **every** peer's screen until the relic grab. The postfix reseats a frozen hand's `_desiredPosition` to its on-screen resting spot (reproducing the fix the beta branch already applies in-engine). Gated by the **Fix pause-hidden hands** setting (default on) — turn it **off** on the beta branch to avoid double-applying the engine's own restore.
-
 #### Map path conflicts and shared-event option conflicts
 
-4. `MapSelectionSynchronizer.MoveToMapCoord()` (private)
+3. `MapSelectionSynchronizer.MoveToMapCoord()` (private)
 
    1. kind: **Prefix returning `false`** when the mod takes the decision over
    2. Source: `Patches/MapConflictDecisionPatch.cs`
@@ -66,13 +58,13 @@ behavior instead of throwing.
       call while a fight is in flight (the game makes one when a vote changes mid-fight) is swallowed.
       When the fight cannot run, the original method executes untouched.
 
-5. `EventSynchronizer.ChooseSharedEventOption()` (private)
+4. `EventSynchronizer.ChooseSharedEventOption()` (private)
 
    1. kind: **Prefix returning `false`** when the mod takes the decision over
    2. Source: `Patches/EventConflictDecisionPatch.cs`
    3. Purpose: Same takeover for a split vote on a shared event; non-shared events never reach this method.
 
-6. `MapSplitVoteAnimation.TryPlay(MapCoord)`
+5. `MapSplitVoteAnimation.TryPlay(MapCoord)`
 
    1. kind: **Prefix returning `false`** with `__result` replaced
    2. Source: `Patches/MapSplitVoteAnimationSkipPatch.cs`
@@ -81,14 +73,14 @@ behavior instead of throwing.
       the 1s winner reveal to await instead. A travel that the stock code decided still plays the
       vanilla animation.
 
-7. `EventSplitVoteAnimation.TryPlay(NEventOptionButton)`
+6. `EventSplitVoteAnimation.TryPlay(NEventOptionButton)`
 
    1. kind: **Prefix returning `false`** with `__result` replaced
    2. Source: `Patches/EventSplitVoteAnimationSkipPatch.cs`
    3. Purpose: Same suppression for shared events; the vanilla post-choice presentation (chosen option
       flashes, others grey out) is deliberately kept.
 
-8. `MapSelectionSynchronizer..ctor(INetGameService, ActionQueueSynchronizer, RunState)`
+7. `MapSelectionSynchronizer` constructor
 
    1. kind: **Postfix**
    2. Source: `Patches/RunStartNetRegistrationPatch.cs`
@@ -98,22 +90,14 @@ behavior instead of throwing.
 
 ### Vanilla private members invoked by reflection
 
-`Fight/FightAnimator.cs` drives the stock fight animation one round at a time. It does **not** patch
-these — it reflects them out and calls them — but it is tightly coupled to their existence and
-signatures:
+The relic fight uses these reflected members to run animations one round at a time and hand off the awards:
 
 - `NTreasureRoomRelicCollection` private fields: `_hands`, `_fightBackstop`, `_holdersInUse`
-- `NTreasureRoomRelicCollection.AnimateRelicAwards(List<RelicPickingResult>)` (private; re-invoked after the prefix)
-- `NHandImageCollection.GetHand`, `BeforeFightStarted`, `BeforeRelicsAwarded`
-- `NHandImage.DoFightMove`, `DoLoseShake`, `GrabRelic`, `SetIsInFight`
+- `NHandImageCollection._hands`
+- `NTreasureRoomRelicCollection.AnimateRelicAwards`, with the matching stable or beta signature
+- `RelicPickingResult.relicIndex` on beta
 
-If any handle is missing (e.g. a future game update renames them), `FightAnimator.Available` becomes
-`false` and the mod degrades gracefully: winners are still resolved correctly and the stock
-end-of-fight replay acts as the visual fallback.
-
-`Patches/HandRestoreOnResumePatch.cs` additionally reflects `NHandImage`'s private `_desiredPosition`
-and `_state` fields for the pause-hidden-hand fix above. If either is missing the postfix simply
-no-ops, leaving hand behavior untouched.
+If the animation fields are unavailable, players still choose moves and the game plays the full fight at the end.
 
 The conflict replacements resolve their targets once, in `Conflict/ConflictRpsHandles.cs`:
 
@@ -135,7 +119,7 @@ These are read or called but not modified. They are listed because a game update
 
 - **Relic picking model** — `RelicPickingResult`, `RelicPickingResultType`, `RelicPickingFight`, `RelicPickingFightRound`, `RelicPickingFightMove`. The mod mirrors the stock elimination rule (a round resolves only with exactly two distinct gestures; `(a+1)%3 == b` loses).
 - **Relic granting** — `RelicCmd.Obtain`, `RelicInventory.AnimateRelic`, `Player.RelicGrabBag.MoveToFallback`. Grants happen per-peer; the mod keeps them in sync by resolving identical winners everywhere.
-- **Run / player state** — `RunManager.Instance.TreasureRoomRelicSynchronizer.CurrentRelics` (the network key for each relic), `Player.RunState`, `IRunState.GetPlayerSlotIndex` / `Players`, `LocalContext.IsMe`.
+- **Run / player state** — `RunManager.Instance.TreasureRoomRelicSynchronizer.CurrentRelics` (the original relic slots on stable), `Player.RunState`, `IRunState.GetPlayerSlotIndex` / `Players`, `LocalContext.IsMe`.
 - **Map + event vote synchronizers** — `MapSelectionSynchronizer.GetVote(Player)` / `MapVote.coord`,
   `EventSynchronizer.GetPlayerVote(Player)` / `IsShared`, `MapCoord`, `MapLocation.coord`. These are
   only read: the votes themselves are snapshotted, never rewritten.
@@ -162,32 +146,27 @@ These are read or called but not modified. They are listed because a game update
 
 ### Stable / beta compatibility
 
-The same DLL targets both branches. The mod only binds members that are identical on both, and reaches
-the rest reflectively:
+The same Mod DLL targets Steam v0.107.1 and public-beta v0.113.0. Players in a lobby
+use the same game version and Mod build.
 
-- `EventSynchronizer`'s constructor and `seed` parameter type differ between branches — never bound;
-  only `GetPlayerVote`, `IsShared` and the private decision/exec methods are used.
-- `RunManager.IsPaused` exists on beta only — `GamePauseState` reads `NCapstoneContainer.InUse` instead.
-- `Rng`'s constructor overloads differ — no `Rng` is ever constructed.
-- `MoveToMapCoordAction.ExecuteAction` differs (fire-and-forget on stable, awaited on beta) — the mod
-  only constructs the action and enqueues it.
-- `MapSelectionSynchronizer`, `NEventLayout`, `NEventRoom` and `RunLocationTargetedMessageBuffer` are
-  byte-for-byte identical on both branches (only the assembly MVID differs). `ActionQueueSynchronizer`
-  and the multiplayer HUD nodes do differ between branches, but only in areas this mod does not touch
-  (reconnect bookkeeping, lobby player-id APIs); `RequestEnqueue(GameAction)`,
-  `NMultiplayerPlayerState.Player` and its `%CharacterIcon` child are the same on both.
-
-If the game ever diverges further, the per-feature guards above disable just the affected replacement
-and the vanilla roulette/decision comes back.
+- On v0.107.1, the relic award callback takes the results list and the fight holder stays in its
+  original parent until the grab. On v0.113.0, the callback also takes `isFinished`, results have
+  `relicIndex`, and the fight holder moves beside the backstop. Non-final award batches use the
+  game's original flow.
+- Both versions wait for Godot's `Finished` signal and stop waiting when the tween is killed or
+  its owner exits.
+- Run-start message registration resolves the map synchronizer constructor with `RunState` on
+  v0.107.1 and `IRunState` on v0.113.0. The map roulette is replaced after a completed map fight
+  picks the travel destination.
 
 ## Settings
 
-All settings live on the mod's RitsuLib page:
+All settings live on the mod's RitsuLib page and are saved globally between sessions.
 
 | Key | Default | Meaning |
 | --- | --- | --- |
 | `countdown_seconds` | 3 | seconds per round before an unchosen gesture is filled at random |
 | `allow_reset` | off | host-only; let players clear/re-choose during the countdown (always rides the full countdown) |
-| `restore_hands_on_resume` | off | stable-only workaround for pause-hidden relic hands (leave off on beta) |
-| `map_conflict_rps` | on | manual RPS for split map votes (host-only) |
-| `event_conflict_rps` | on | manual RPS for split shared-event option votes (host-only) |
+| `restore_hands_on_resume` | off | local fix for relic-fight hands that stay off-screen after closing the pause menu |
+| `map_conflict_rps` | off | manual RPS for split map votes (host-only) |
+| `event_conflict_rps` | off | manual RPS for split shared-event option votes (host-only) |

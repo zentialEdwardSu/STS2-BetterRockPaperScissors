@@ -28,34 +28,35 @@ public static class RpsNetHub
     // its latency to the host so it can phase-align its (cosmetic) countdown bar.
     private static ulong? _hostId;
 
-    private static bool _registered;
+    private static INetGameService? _registeredNet;
 
     private static INetGameService Net => RunManager.Instance.NetService;
 
     public static void Register()
     {
-        if (_registered)
+        if (_registeredNet != null)
             return;
-        _registered = true;
+        var net = Net;
+        _registeredNet = net;
         _hostId = null;
         _receivedMoves.Clear();
         _resolvedRounds.Clear();
         _roundBegan.Clear();
-        Net.RegisterMessageHandler<RpsMoveChosenMessage>(OnMoveChosen);
-        Net.RegisterMessageHandler<RpsRoundResolvedMessage>(OnRoundResolved);
-        Net.RegisterMessageHandler<RpsRoundBeganMessage>(OnRoundBegan);
-        Entry.Logger.Info($"[RPS net] handlers registered (net type {Net.Type}, local id {Net.NetId})");
+        net.RegisterMessageHandler<RpsMoveChosenMessage>(OnMoveChosen);
+        net.RegisterMessageHandler<RpsRoundResolvedMessage>(OnRoundResolved);
+        net.RegisterMessageHandler<RpsRoundBeganMessage>(OnRoundBegan);
+        Entry.Logger.Info($"[RPS net] handlers registered (net type {net.Type}, local id {net.NetId})");
     }
 
     public static void Unregister()
     {
-        if (!_registered)
+        if (_registeredNet is not { } net)
             return;
-        _registered = false;
+        _registeredNet = null;
         _hostId = null;
-        Net.UnregisterMessageHandler<RpsMoveChosenMessage>(OnMoveChosen);
-        Net.UnregisterMessageHandler<RpsRoundResolvedMessage>(OnRoundResolved);
-        Net.UnregisterMessageHandler<RpsRoundBeganMessage>(OnRoundBegan);
+        net.UnregisterMessageHandler<RpsMoveChosenMessage>(OnMoveChosen);
+        net.UnregisterMessageHandler<RpsRoundResolvedMessage>(OnRoundResolved);
+        net.UnregisterMessageHandler<RpsRoundBeganMessage>(OnRoundBegan);
         _receivedMoves.Clear();
         // Fail any still-pending waiters so awaiting resolvers don't hang on teardown.
         foreach (var tcs in _resolvedRounds.Values)

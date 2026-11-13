@@ -7,7 +7,7 @@ namespace STS2BetterRockPaperScissors.Settings;
 
 /// <summary>
 /// Persisted, JSON-backed config for the mod plus its RitsuLib settings page.
-/// Currently the per-round gesture countdown, the two conflict-replacement toggles, and the pause-fix switch.
+/// Stores the gesture countdown, re-choose option, pause hand fix, and conflict toggles.
 /// </summary>
 public static class ModConfig
 {
@@ -18,8 +18,7 @@ public static class ModConfig
     private const int DefaultCountdownSeconds = 3;
     private const int MaxCountdownSeconds = 30;
     private const bool DefaultAllowReset = false;
-    private const bool DefaultRestoreHandsOnResume = false;
-    private const bool DefaultConflictRps = true;
+    private const bool DefaultConflictRps = false;
 
     /// <summary>
     /// Hard ceiling on rounds for one conflict fight. A tie-only fight against a player who never picks would
@@ -31,11 +30,11 @@ public static class ModConfig
     /// <summary>The serialized config model. Kept tiny on purpose.</summary>
     private class Data
     {
-        public int CountdownSeconds = DefaultCountdownSeconds;
-        public bool AllowReset = DefaultAllowReset;
-        public bool RestoreHandsOnResume = DefaultRestoreHandsOnResume;
-        public bool MapConflictRps = DefaultConflictRps;
-        public bool EventConflictRps = DefaultConflictRps;
+        public int CountdownSeconds { get; set; } = DefaultCountdownSeconds;
+        public bool AllowReset { get; set; } = DefaultAllowReset;
+        public bool RestoreHandsOnResume { get; set; }
+        public bool MapConflictRps { get; set; } = DefaultConflictRps;
+        public bool EventConflictRps { get; set; } = DefaultConflictRps;
     }
 
     /// <summary>Countdown in seconds before a move is auto-picked, clamped to the valid range.</summary>
@@ -58,14 +57,7 @@ public static class ModConfig
     /// </summary>
     public static bool AllowReset => Store.Get<Data>(DataKey).AllowReset;
 
-    /// <summary>
-    /// When true, the mod reseats each frozen fighter hand's resting position when the pause/ESC menu
-    /// closes, so a hand that retracted off-screen while paused animates back on-screen. This works
-    /// around a bug in the STABLE game branch where <c>NHandImage.AnimateIn</c> re-runs the slide-in
-    /// tween but never restores a frozen hand's target position, so the pauser's hand stays off-screen
-    /// until the relic grab. The BETA branch already fixes this in-engine, so leave this OFF on beta to
-    /// avoid fighting the game's own restore. Local/cosmetic only — never touched on non-fighter peers.
-    /// </summary>
+    /// <summary>Local option to restore frozen relic-fight hands when they slide back in.</summary>
     public static bool RestoreHandsOnResume => Store.Get<Data>(DataKey).RestoreHandsOnResume;
 
     /// <summary>
@@ -103,55 +95,50 @@ public static class ModConfig
                 .AddIntSlider(
                     "countdown_seconds",
                     ModI18N.Text("settings.countdown.label", "Gesture countdown (seconds)"),
-                    new ModSettingsCallbackValueBinding<int>(
+                    new ModSettingsValueBinding<Data, int>(
                         Entry.ModId,
-                        "countdown_seconds",
+                        DataKey,
                         SaveScope.Global,
-                        () => Store.Get<Data>(DataKey).CountdownSeconds,
-                        value => Store.Get<Data>(DataKey).CountdownSeconds = value,
-                        () => Store.Save(DataKey)),
+                        data => data.CountdownSeconds,
+                        (data, value) => data.CountdownSeconds = value),
                     MinCountdownSeconds,
                     MaxCountdownSeconds,
                     1)
                 .AddToggle(
                     "allow_reset",
                     ModI18N.Text("settings.allow_reset.label", "Allow re-choosing (host only; always uses full countdown)"),
-                    new ModSettingsCallbackValueBinding<bool>(
+                    new ModSettingsValueBinding<Data, bool>(
                         Entry.ModId,
-                        "allow_reset",
+                        DataKey,
                         SaveScope.Global,
-                        () => Store.Get<Data>(DataKey).AllowReset,
-                        value => Store.Get<Data>(DataKey).AllowReset = value,
-                        () => Store.Save(DataKey)))
+                        data => data.AllowReset,
+                        (data, value) => data.AllowReset = value))
                 .AddToggle(
                     "restore_hands_on_resume",
-                    ModI18N.Text("settings.restore_hands.label", "Fix pause-hidden hands (stable branch only; turn off on beta)"),
-                    new ModSettingsCallbackValueBinding<bool>(
+                    ModI18N.Text("settings.restore_hands.label", "Fix missing relic-fight hands after pause (local)"),
+                    new ModSettingsValueBinding<Data, bool>(
                         Entry.ModId,
-                        "restore_hands_on_resume",
+                        DataKey,
                         SaveScope.Global,
-                        () => Store.Get<Data>(DataKey).RestoreHandsOnResume,
-                        value => Store.Get<Data>(DataKey).RestoreHandsOnResume = value,
-                        () => Store.Save(DataKey)))
+                        data => data.RestoreHandsOnResume,
+                        (data, value) => data.RestoreHandsOnResume = value))
                 .AddToggle(
                     "map_conflict_rps",
                     ModI18N.Text("settings.map_conflict.label", "Manual RPS for map path conflicts (host only)"),
-                    new ModSettingsCallbackValueBinding<bool>(
+                    new ModSettingsValueBinding<Data, bool>(
                         Entry.ModId,
-                        "map_conflict_rps",
+                        DataKey,
                         SaveScope.Global,
-                        () => Store.Get<Data>(DataKey).MapConflictRps,
-                        value => Store.Get<Data>(DataKey).MapConflictRps = value,
-                        () => Store.Save(DataKey)))
+                        data => data.MapConflictRps,
+                        (data, value) => data.MapConflictRps = value))
                 .AddToggle(
                     "event_conflict_rps",
                     ModI18N.Text("settings.event_conflict.label", "Manual RPS for shared event option conflicts (host only)"),
-                    new ModSettingsCallbackValueBinding<bool>(
+                    new ModSettingsValueBinding<Data, bool>(
                         Entry.ModId,
-                        "event_conflict_rps",
+                        DataKey,
                         SaveScope.Global,
-                        () => Store.Get<Data>(DataKey).EventConflictRps,
-                        value => Store.Get<Data>(DataKey).EventConflictRps = value,
-                        () => Store.Save(DataKey)))));
+                        data => data.EventConflictRps,
+                        (data, value) => data.EventConflictRps = value))));
     }
 }

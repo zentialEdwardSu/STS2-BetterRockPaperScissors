@@ -1,5 +1,5 @@
-兼容性: [b]正式版与 beta版(v0.111.0)[/b]
-Compatibility: [b]stable and  public-beta-v0.111.0[/b]
+兼容目标：[b]Steam 正式版 v0.107.1 和 public-beta v0.113.0[/b]
+Target versions: [b]Steam v0.107.1 and public-beta v0.113.0[/b]
 
 为多人模式增加更多的对抗性！（bushi）
 
@@ -15,9 +15,9 @@ Duration of countdown can be sat in Host‘s RitsuLib's settings page.
 
 The reselectable gesture option can be activated in the RitsuLib settings page on the console. After the reselectable gesture is activated, the results will only be calculated after the countdown ends (if it is not activated, the results will also be calculated when all players have selected a gesture). During the countdown, players can click the reset button directly below the selected gesture to reselect.
 
-选路与共享事件的手动出拳可以在主机端的RitsuLib设置页面分别开关（默认开启），关闭后该冲突恢复为原版轮盘赌。
+选路与共享事件的手动出拳可以在主机端的RitsuLib设置页面分别开关。两项默认关闭，设置会在重启后保留。关闭时使用原版轮盘赌。
 
-Manual rock-paper-scissors for map-path conflicts and for shared-event option conflicts can be toggled separately in the host's RitsuLib settings page (both on by default); turning one off restores the vanilla roulette for it.
+Manual rock-paper-scissors for map-path conflicts and for shared-event option conflicts can be toggled separately in the host's RitsuLib settings page. Both default to off and are saved between sessions. Each conflict uses the vanilla roulette when its option is off.
 
 [h2] 修改日志 Change Logs [/h2]
 
@@ -51,7 +51,6 @@ Manual rock-paper-scissors for map-path conflicts and for shared-event option co
 [olist]
  [*] 修复了在猜拳进行中时打开pause菜单的错误UI层级
  [*] 添加了可选的重选手势选项，在主机端激活重选手势选项时，结算只会在倒计时结束后进行（目前结算会在倒计时结束以及所有玩家都选择手势后进行），在倒计时期间可以更改自己选择的手势。
- [*] 修复了正式版中的原版bug：当某位玩家在猜拳过程中打开暂停/ESC菜单时，其缩回屏幕外的手不会再回来（要到抓取遗物时才恢复）。此修复默认关闭，因为beta分支V0.108.0已修复，正式版可在 RitsuLib设置中开启“修复暂停后消失的手“，这个选项是本地选项。
 [/olist]
 
 [b]The mod has been tested and works on the beta branch[/b]. The main changes in this version are as follows:
@@ -60,7 +59,6 @@ Manual rock-paper-scissors for map-path conflicts and for shared-event option co
 
 [*] Fixed a bug in the UI hierarchy where the pause menu would open during rock-paper-scissors.
 [*] Added an optional reselect gesture option. When a reselect gesture option is activated on the host side, the results will only occur after the countdown ends (currently, the results occur after the countdown ends and all players have selected their gestures). Players can change their selected gesture during the countdown.
-[*] Fixed a stable-branch bug: when a player opened the pause/ESC menu during rock-paper-scissors, their hand retracted off-screen and never returned (it only came back at the relic grab). This fix is off by default, since the beta branch(v0.108.0) already fixes it, so it can be turned on via the "Fix pause-hidden hands" in  RitsuLib's setting, the setting option is a local option.
 [/olist]
 
 All source code and images are released on GitHub under the MIT license. Art assets from Megacrit used in the project are still subject to Megacrit's usage rules.

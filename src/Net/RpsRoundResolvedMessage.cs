@@ -13,7 +13,7 @@ namespace STS2BetterRockPaperScissors.Net;
 /// </summary>
 public struct RpsRoundResolvedMessage : INetMessage, IPacketSerializable
 {
-    /// <summary>Index of the relic in TreasureRoomRelicSynchronizer.CurrentRelics this fight is for.</summary>
+    /// <summary>Original treasure slot of the relic this fight is for.</summary>
     public byte relicKey;
 
     /// <summary>Zero-based round index within the fight.</summary>

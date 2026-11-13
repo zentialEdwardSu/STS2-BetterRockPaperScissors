@@ -51,33 +51,6 @@ internal static class ConflictRpsGate
     }
 
     /// <summary>
-    /// True when this peer must treat a conflict as mod-owned for presentation purposes, i.e. suppress the stock
-    /// split-vote animation even if the session state is missing on this peer. The host uses its own toggle, a
-    /// client follows the host (it has no way to know the host's setting beyond "a session arrived").
-    /// </summary>
-    internal static bool CanSuppressStockAnimation(ConflictKind kind)
-    {
-        if (!HandlesResolved(kind))
-            return false;
-
-        INetGameService? net = RunManager.Instance.NetService;
-        if (net == null)
-            return false;
-
-        return net.Type switch
-        {
-            NetGameType.Host => kind switch
-            {
-                ConflictKind.MapPath => ModConfig.MapConflictRps,
-                ConflictKind.EventOption => ModConfig.EventConflictRps,
-                _ => false,
-            },
-            NetGameType.Client => true,
-            _ => false,
-        };
-    }
-
-    /// <summary>
     /// The two replacements degrade independently: a missing map member must not disable shared-event fights,
     /// and vice versa.
     /// </summary>

@@ -61,6 +61,14 @@ internal static class ConflictRpsNetHub
         if (_registeredFor != null)
             Unregister(_registeredFor);
 
+        ConflictRpsCoordinator.ClearCurrent();
+        foreach (byte sessionId in _roundBegan.Keys.Select(key => key.session)
+                     .Concat(_roundResolved.Keys.Select(key => key.session))
+                     .Concat(_sessionResolved.Keys).Distinct().ToArray())
+            ClearSession(sessionId);
+        _moves.Clear();
+        _roundSettings.Clear();
+
         _registeredFor = net;
         _hostId = null;
         IsRegistered = true;

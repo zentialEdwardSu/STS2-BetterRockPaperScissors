@@ -4,6 +4,8 @@ using MegaCrit.Sts2.Core.Entities.Players;
 using MegaCrit.Sts2.Core.Entities.TreasureRelicPicking;
 using MegaCrit.Sts2.Core.Models;
 using MegaCrit.Sts2.Core.Multiplayer.Game;
+using MegaCrit.Sts2.Core.Nodes.GodotExtensions;
+using MegaCrit.Sts2.Core.Nodes.Screens.TreasureRoomRelic;
 using MegaCrit.Sts2.Core.Random;
 using MegaCrit.Sts2.Core.Runs;
 using STS2BetterRockPaperScissors.Net;
@@ -31,21 +33,20 @@ public static class InteractiveFightResolver
 {
     /// <summary>
     /// Resolves one FoughtOver result in place: rewrites result.fight and result.player from chosen
-    /// moves. <paramref name="relicKey"/> is the relic's index in CurrentRelics (the network key).
-    /// Each round is animated the instant it resolves, via <paramref name="animator"/> (when
-    /// available); the relic is granted to the winner at the end of the fight.
+    /// moves. <paramref name="relicKey"/> is the original relic slot and network key.
+    /// Returns true when the animator has granted the relic. Otherwise the game grants it.
     /// </summary>
-    public static async Task ResolveFight(
+    public static async Task<bool> ResolveFight(
         RelicPickingResult result,
         byte relicKey,
         Control overlayParent,
-        FightAnimator animator,
+        FightAnimator? animator,
         CancellationToken token)
     {
         // The set of fighters, in a deterministic order shared by all peers (slot index order).
-        IRunState runState = result.player?.RunState
-                            ?? result.fight?.playersInvolved?.FirstOrDefault()?.RunState;
-        List<Player> fighters = OrderFighters(result.fight.playersInvolved, runState);
+        List<Player> participants = result.fight!.playersInvolved;
+        IRunState runState = result.player?.RunState ?? participants[0].RunState;
+        List<Player> fighters = OrderFighters(participants, runState);
 
         var fight = new RelicPickingFight();
         fight.playersInvolved.AddRange(fighters);
@@ -60,9 +61,9 @@ public static class InteractiveFightResolver
         // Fight intro: pull the relic to the backstop and flag fighters as in-fight. Holder is reused
         // for the winner's grab at the end. Null when the animator isn't available (we still resolve
         // the winner correctly; the stock replay can act as the visual fallback).
-        object holder = animator != null && animator.Available
-            ? await animator.BeginFight(result.relic, fighters)
-            : null;
+        NTreasureRoomRelicHolder? holder = null;
+        if (animator != null)
+            await TryAnimate(async () => { holder = await animator.BeginFight(relicKey, result.relic, fighters); });
 
         byte round = 0;
         int animatedRound = 0;
@@ -79,7 +80,8 @@ public static class InteractiveFightResolver
         while (survivors.Count > 1)
         {
             RelicPickingFightMove?[] resolved =
-                await ResolveRound(relicKey, round, fighters, survivors, netType, overlayParent, animator, token);
+                await ResolveRound(relicKey, round, fighters, survivors, netType, overlayParent,
+                    holder != null ? animator : null, token);
 
             int before = survivors.Count;
             var survivorsBefore = new HashSet<int>(survivors);
@@ -101,12 +103,12 @@ public static class InteractiveFightResolver
                 foreach (int i in survivorsBefore)
                 {
                     survivorPlayers.Add(fighters[i]);
-                    if (resolved[i].HasValue)
-                        moves[fighters[i]] = resolved[i].Value;
+                    if (resolved[i] is { } move)
+                        moves[fighters[i]] = move;
                 }
                 var eliminated = survivorsBefore.Where(i => !survivors.Contains(i))
                     .Select(i => fighters[i]).ToList();
-                await animator.AnimateRound(animatedRound, survivorPlayers, moves, eliminated);
+                await TryAnimate(() => animator!.AnimateRound(animatedRound, survivorPlayers, moves, eliminated));
                 animatedRound++;
             }
 
@@ -129,11 +131,31 @@ public static class InteractiveFightResolver
 
         // Fight outro + grant: winner grabs the relic, backstop fades out, relic is obtained. When the
         // animator isn't available the patch leaves this fight on the stock award path instead.
-        if (holder != null)
+        bool granted = false;
+        if (holder is { } awardHolder)
         {
-            await animator.GrabRelicForWinner(holder, winner, fighters);
-            if (runState != null)
-                animator.GrantRelic(result.relic, winner, runState, holder);
+            await TryAnimate(async () =>
+            {
+                await animator!.GrabRelicForWinner(awardHolder, winner);
+                token.ThrowIfCancellationRequested();
+                granted = animator.GrantRelic(result.relic, winner, runState, awardHolder);
+            });
+        }
+        animator?.EndFight(granted);
+        return granted;
+
+        async Task TryAnimate(Func<Task> animate)
+        {
+            try
+            {
+                await animate();
+            }
+            catch (Exception e) when (!token.IsCancellationRequested)
+            {
+                Entry.Logger.Warn($"[RPS] Animation failed for relic slot {relicKey}. Using the original replay: {e}");
+                holder = null;
+                animator!.EndFight(false);
+            }
         }
     }
 
@@ -145,9 +167,10 @@ public static class InteractiveFightResolver
         HashSet<int> survivors,
         NetGameType netType,
         Control overlayParent,
-        FightAnimator animator,
+        FightAnimator? animator,
         CancellationToken token)
     {
+        token.ThrowIfCancellationRequested();
         var resolved = new RelicPickingFightMove?[fighters.Count];
 
         // Is the local player a surviving fighter this round?
@@ -166,7 +189,7 @@ public static class InteractiveFightResolver
             // Wait for the host to announce the round + its AUTHORITATIVE countdown, then show the
             // picker for exactly that long. The picker also closes the instant the host's resolved
             // round arrives, so the client never lags behind the host's resolution.
-            (byte countdown, bool clientAllowReset) = await RpsNetHub.AwaitRoundBegan(relicKey, round);
+            (byte countdown, bool clientAllowReset) = await RpsNetHub.AwaitRoundBegan(relicKey, round).WaitAsync(token);
             Task<List<byte>> resolvedTask = RpsNetHub.AwaitResolvedRound(relicKey, round);
 
             if (localIndex >= 0)
@@ -180,7 +203,7 @@ public static class InteractiveFightResolver
                 await PromptLocalMove(overlayParent, LocalCharacter(fighters), relicKey, round, countdown, latencyOffset, clientAllowReset, animator, resolvedTask, token);
             }
 
-            List<byte> authoritative = await resolvedTask;
+            List<byte> authoritative = await resolvedTask.WaitAsync(token);
             ApplyAuthoritative(authoritative, survivors, resolved);
             return resolved;
         }
@@ -197,11 +220,19 @@ public static class InteractiveFightResolver
         if (realMultiplayer)
             RpsNetHub.BroadcastRoundBegan(relicKey, round, hostCountdown, allowReset);
 
-        RpsPickerView overlay = null;
+        RpsPickerView? overlay = null;
         if (localIndex >= 0)
             overlay = ShowOverlay(overlayParent, LocalCharacter(fighters), allowReset);
 
-        await RunAuthoritativeCountdown(relicKey, round, fighters, survivors, localIndex, realMultiplayer, overlay, hostCountdown, allowReset, animator);
+        try
+        {
+            await RunAuthoritativeCountdown(relicKey, round, fighters, survivors, localIndex, realMultiplayer,
+                overlayParent, overlay, hostCountdown, allowReset, animator, token);
+        }
+        finally
+        {
+            overlay?.Close();
+        }
 
         // Gather final moves for survivors; fill the rest via RNG.
         var authoritativeMoves = new List<byte>(fighters.Count);
@@ -214,9 +245,9 @@ public static class InteractiveFightResolver
             }
 
             byte move;
-            if (i == localIndex && overlay != null && overlay.HasPick)
+            if (i == localIndex && overlay?.CurrentPick is { } pick)
             {
-                move = (byte)overlay.CurrentPick.Value;
+                move = (byte)pick;
                 Entry.Logger.Info($"[RPS] local player {fighters[i].NetId} picked {(RelicPickingFightMove)move} (relic {relicKey} round {round})");
             }
             else if (realMultiplayer && !LocalContext.IsMe(fighters[i]))
@@ -239,8 +270,6 @@ public static class InteractiveFightResolver
             resolved[i] = (RelicPickingFightMove)move;
         }
 
-        overlay?.Close();
-
         if (realMultiplayer)
             RpsNetHub.BroadcastResolvedRound(relicKey, round, authoritativeMoves);
 
@@ -260,30 +289,24 @@ public static class InteractiveFightResolver
         HashSet<int> survivors,
         int localIndex,
         bool realMultiplayer,
-        RpsPickerView overlay,
+        Control overlayParent,
+        RpsPickerView? overlay,
         double countdownSeconds,
         bool allowReset,
-        FightAnimator animator)
+        FightAnimator? animator,
+        CancellationToken token)
     {
         double remaining = countdownSeconds;
-        SceneTree tree = Engine.GetMainLoop() as SceneTree;
         overlay?.SetRemaining(remaining, countdownSeconds);
 
         while (remaining > 0.0)
         {
-            if (tree == null)
-            {
-                await Task.Delay((int)(remaining * 1000));
-                return;
-            }
-
             // Without re-choosing, a completed pick is final — end the round as soon as everyone's in.
             if (!allowReset
                 && AllSurvivorsReady(relicKey, round, fighters, survivors, localIndex, realMultiplayer, overlay))
                 return;
 
-            await tree.ToSignal(tree, SceneTree.SignalName.ProcessFrame);
-            remaining -= tree.Root.GetProcessDeltaTime();
+            remaining -= await overlayParent.AwaitProcessFrame(token);
             overlay?.SetRemaining(remaining, countdownSeconds);
             // The ESC menu is a game-logic pause, not a scene-tree pause, so the countdown keeps draining
             // (correct: the host's authoritative timer never stops, so freezing locally would desync).
@@ -305,7 +328,7 @@ public static class InteractiveFightResolver
         HashSet<int> survivors,
         int localIndex,
         bool realMultiplayer,
-        RpsPickerView overlay)
+        RpsPickerView? overlay)
     {
         foreach (int i in survivors)
         {
@@ -342,7 +365,7 @@ public static class InteractiveFightResolver
         double countdownSeconds,
         double initialElapsed,
         bool allowReset,
-        FightAnimator animator,
+        FightAnimator? animator,
         Task<List<byte>> resolvedTask,
         CancellationToken token)
     {
@@ -352,44 +375,39 @@ public static class InteractiveFightResolver
         double remaining = countdownSeconds - initialElapsed;
         if (remaining < 0.0)
             remaining = 0.0;
-        SceneTree tree = Engine.GetMainLoop() as SceneTree;
         overlay.SetRemaining(remaining, countdownSeconds);
 
         // Track the last move we sent so a re-choose re-sends (the host overwrites to the latest). A
         // cancel back to blank does NOT retract on the wire — if nothing else is picked before the
         // countdown ends the host RNG-fills, matching the timeout-to-random behavior.
         RelicPickingFightMove? lastSent = null;
-        while (remaining > 0.0
-               && !resolvedTask.IsCompleted
-               && !token.IsCancellationRequested)
+        try
         {
-            // Send the current pick whenever it changes, keeping the picker visible/ticking so the
-            // player can still re-choose or clear it.
-            if (overlay.HasPick && overlay.CurrentPick != lastSent)
+            while (remaining > 0.0 && !resolvedTask.IsCompleted)
             {
-                RpsNetHub.SendMove(relicKey, round, (byte)overlay.CurrentPick.Value);
-                lastSent = overlay.CurrentPick;
+                SendChangedPick();
+                remaining -= await overlayParent.AwaitProcessFrame(token);
+                overlay.SetRemaining(remaining, countdownSeconds);
+                animator?.SyncPauseVisibility();
+                overlay.SyncPauseVisibility();
             }
-
-            if (tree == null)
-            {
-                await Task.WhenAny(overlay.Result, resolvedTask, Task.Delay((int)(remaining * 1000)));
-                break;
-            }
-            await tree.ToSignal(tree, SceneTree.SignalName.ProcessFrame);
-            remaining -= tree.Root.GetProcessDeltaTime();
-            overlay.SetRemaining(remaining, countdownSeconds);
-            // Countdown keeps draining while a menu is open (stays in sync with the host); just hide and
-            // restore the raised fight visuals + picker. See RunAuthoritativeCountdown.
-            animator?.SyncPauseVisibility();
-            overlay.SyncPauseVisibility();
+            if (!resolvedTask.IsCompleted)
+                SendChangedPick();
+        }
+        finally
+        {
+            overlay.Close();
         }
 
-        // Catch a pick/re-choose that landed on the final frame before the loop ended.
-        if (overlay.HasPick && overlay.CurrentPick != lastSent)
-            RpsNetHub.SendMove(relicKey, round, (byte)overlay.CurrentPick.Value);
-
-        overlay.Close();
+        void SendChangedPick()
+        {
+            token.ThrowIfCancellationRequested();
+            if (overlay.CurrentPick is { } pick && pick != lastSent)
+            {
+                RpsNetHub.SendMove(relicKey, round, (byte)pick);
+                lastSent = pick;
+            }
+        }
     }
 
     private static RpsPickerView ShowOverlay(Control overlayParent, CharacterModel? character, bool allowReset)
@@ -462,10 +480,6 @@ public static class InteractiveFightResolver
         return (RelicPickingFightMove)(((int)a + 1) % 3) == b ? a : b;
     }
 
-    private static List<Player> OrderFighters(List<Player> players, IRunState runState)
-    {
-        if (runState == null)
-            return players.ToList();
-        return players.OrderBy(p => runState.GetPlayerSlotIndex(p)).ToList();
-    }
+    private static List<Player> OrderFighters(List<Player> players, IRunState runState) =>
+        players.OrderBy(p => runState.GetPlayerSlotIndex(p)).ToList();
 }

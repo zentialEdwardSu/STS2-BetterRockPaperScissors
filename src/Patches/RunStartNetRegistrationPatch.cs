@@ -25,7 +25,9 @@ public static class RunStartNetRegistrationPatch
         AccessTools.Constructor(
             SynchronizerType,
             new[] { typeof(INetGameService), typeof(ActionQueueSynchronizer), typeof(RunState) })
-        ?? AccessTools.GetDeclaredConstructors(SynchronizerType).FirstOrDefault();
+        ?? AccessTools.Constructor(
+            SynchronizerType,
+            new[] { typeof(INetGameService), typeof(ActionQueueSynchronizer), typeof(IRunState) });
 
     [HarmonyPrepare]
     private static bool Prepare() => Target != null;

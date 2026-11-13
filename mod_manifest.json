@@ -3,7 +3,7 @@
   "name": "BetterRockPaperScissors",
   "author": "EdwardSu",
   "description": "Replaces the random rock-paper-scissors of relic fights and the multiplayer vote roulette (map path and shared-event option conflicts) with player-chosen gestures on a countdown, synced across the party",
-  "version": "v0.2.0",
+  "version": "v0.2.1",
   "has_pck": false,
   "has_dll": true,
   "affects_gameplay": true,

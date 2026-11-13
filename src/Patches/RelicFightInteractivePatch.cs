@@ -4,6 +4,7 @@ using HarmonyLib;
 using MegaCrit.Sts2.Core.Entities.Players;
 using MegaCrit.Sts2.Core.Entities.TreasureRelicPicking;
 using MegaCrit.Sts2.Core.Models;
+using MegaCrit.Sts2.Core.Nodes.Screens.TreasureRoomRelic;
 using MegaCrit.Sts2.Core.Runs;
 using STS2BetterRockPaperScissors.Fight;
 using STS2BetterRockPaperScissors.Net;
@@ -15,126 +16,148 @@ namespace STS2BetterRockPaperScissors.Patches;
 /// scissors fight replaced by player-chosen gestures (synced across peers) before the stock
 /// animation replays it.
 ///
-/// Seam: NTreasureRoomRelicCollection.OnRelicsAwarded(List&lt;RelicPickingResult&gt;) — a plain
-/// synchronous method that runs on every peer at the same logical point. We prefix it, run our
-/// async resolver, then call the original private AnimateRelicAwards so all existing animation and
-/// relic-granting code runs unchanged. On any failure we fall back to animating the original RNG
-/// fights so the room can never hang.
+/// Stable and beta use different award signatures. Resolve the matching pair before taking over
+/// so the original animation can finish the room on either branch.
 /// </summary>
 [HarmonyPatch]
 public static class RelicFightInteractivePatch
 {
-    private static readonly Type CollectionType = AccessTools.TypeByName(
-        "MegaCrit.Sts2.Core.Nodes.Screens.TreasureRoomRelic.NTreasureRoomRelicCollection");
+    private static readonly FieldInfo? RelicIndexField = AccessTools.Field(typeof(RelicPickingResult), "relicIndex");
+    private static readonly (MethodInfo OnAwarded, MethodInfo Animate, bool UsesRelicIndex)? AwardMethods =
+        ResolveAwardMethods();
 
-    private static readonly MethodInfo AnimateRelicAwardsMethod =
-        CollectionType != null ? AccessTools.Method(CollectionType, "AnimateRelicAwards") : null;
-
-    private static MethodBase TargetMethod()
+    private static (MethodInfo, MethodInfo, bool)? ResolveAwardMethods()
     {
-        if (CollectionType == null)
-            throw new Exception("Cannot find NTreasureRoomRelicCollection type");
-        MethodInfo method = AccessTools.Method(CollectionType, "OnRelicsAwarded");
-        if (method == null)
-            throw new Exception("Cannot find OnRelicsAwarded method");
-        return method;
+        var collectionType = typeof(NTreasureRoomRelicCollection);
+        var stableSignature = new[] { typeof(List<RelicPickingResult>) };
+        var betaSignature = new[] { typeof(List<RelicPickingResult>), typeof(bool) };
+
+        if (AccessTools.DeclaredMethod(collectionType, "OnRelicsAwarded", betaSignature) is { } beta &&
+            AccessTools.DeclaredMethod(collectionType, "AnimateRelicAwards", betaSignature) is { } betaAnimation &&
+            beta.ReturnType == typeof(void) && betaAnimation.ReturnType == typeof(Task) &&
+            RelicIndexField?.FieldType == typeof(int))
+            return (beta, betaAnimation, true);
+
+        if (AccessTools.DeclaredMethod(collectionType, "OnRelicsAwarded", stableSignature) is { } stable &&
+            AccessTools.DeclaredMethod(collectionType, "AnimateRelicAwards", stableSignature) is { } stableAnimation &&
+            stable.ReturnType == typeof(void) && stableAnimation.ReturnType == typeof(Task))
+            return (stable, stableAnimation, false);
+
+        return null;
     }
 
-    private static bool Prefix(object __instance, List<RelicPickingResult> results)
+    [HarmonyPrepare]
+    private static bool Prepare() => AwardMethods.HasValue;
+
+    private static MethodBase TargetMethod() => AwardMethods!.Value.OnAwarded;
+
+    private static bool Prefix(NTreasureRoomRelicCollection __instance, object[] __args)
     {
-        // If anything we depend on is missing, let the original run untouched.
-        if (AnimateRelicAwardsMethod == null || __instance is not Control overlayParent)
+        if (AwardMethods is not { } methods || __args[0] is not List<RelicPickingResult> results ||
+            (methods.UsesRelicIndex && __args[1] is not true))
             return true;
 
-        TaskHelperRunSafely(OrchestrateAsync(__instance, overlayParent, results));
-        return false; // we take over; original is suppressed.
+        var fights = new List<(RelicPickingResult Result, byte Slot)>();
+        var slots = new HashSet<byte>();
+        IReadOnlyList<RelicModel>? currentRelics = methods.UsesRelicIndex
+            ? null
+            : RunManager.Instance.TreasureRoomRelicSynchronizer.CurrentRelics;
+
+        foreach (RelicPickingResult result in results)
+        {
+            if (result.type != RelicPickingResultType.FoughtOver || result.fight == null)
+                continue;
+
+            int index = methods.UsesRelicIndex
+                ? (int)RelicIndexField!.GetValue(result)!
+                : IndexOfRelic(currentRelics, result.relic);
+            if (index < 0 || index > byte.MaxValue || !slots.Add((byte)index))
+            {
+                Entry.Logger.Warn("[RPS] Could not identify distinct relic slots. Using the original awards.");
+                return true;
+            }
+            fights.Add((result, (byte)index));
+        }
+
+        if (fights.Count == 0)
+            return true;
+
+        fights.Sort((a, b) => a.Slot.CompareTo(b.Slot));
+        TaskHelperRunSafely(OrchestrateAsync(__instance, results, fights, methods.Animate, (object[])__args.Clone()));
+        return false;
     }
 
-    private static async Task OrchestrateAsync(object instance, Control overlayParent, List<RelicPickingResult> results)
+    private static async Task OrchestrateAsync(
+        NTreasureRoomRelicCollection collection,
+        List<RelicPickingResult> results,
+        List<(RelicPickingResult Result, byte Slot)> fights,
+        MethodInfo animateAwards,
+        object[] awardArgs)
     {
-        // Cancel in-flight prompts/awaits if the relic screen leaves the tree mid-fight.
-        var cts = new System.Threading.CancellationTokenSource();
+        using var cts = new CancellationTokenSource();
         void OnTreeExiting() => cts.Cancel();
-        overlayParent.TreeExiting += OnTreeExiting;
+        collection.TreeExiting += OnTreeExiting;
+        var granted = new HashSet<RelicPickingResult>();
+        FightAnimator? animator = null;
 
         try
         {
+            collection.SetSelectionEnabled(false);
             RpsNetHub.Register();
             try
             {
-                IReadOnlyList<RelicModel> currentRelics =
-                    RunManager.Instance.TreasureRoomRelicSynchronizer.CurrentRelics;
-
-                // Animates each RPS round as it resolves (per-round), instead of the stock end-of-fight
-                // replay. When unavailable (missing reflection handle) we leave fights on the stock
-                // path so the room still works.
-                var animator = new FightAnimator(instance, cts.Token);
-                if (animator.Available)
-                    animator.PreFreezeHands();
-
-                // Process fought-over relics in a deterministic order (relic index) on every peer.
-                var fights = new List<(RelicPickingResult result, byte key)>();
-                foreach (RelicPickingResult result in results)
-                {
-                    if (result.type != RelicPickingResultType.FoughtOver || result.fight == null)
-                        continue;
-                    byte key = (byte)IndexOfRelic(currentRelics, result.relic);
-                    fights.Add((result, key));
-                }
-                fights.Sort((a, b) => a.key.CompareTo(b.key));
-
-                Entry.Logger.Info(
-                    $"[RPS] OnRelicsAwarded intercepted: {results.Count} result(s), {fights.Count} fought-over fight(s) to resolve interactively (animator {(animator.Available ? "on" : "unavailable")})");
-
-                foreach ((RelicPickingResult result, byte key) in fights)
-                {
-                    await InteractiveFightResolver.ResolveFight(
-                        result, key, overlayParent, animator, cts.Token);
-                }
-
-                // Fights hid non-participant hands one fight at a time; re-show them all so the stock
-                // end-of-awards path (and any single-voter/consolation animation) isn't left with
-                // hidden hands.
-                animator.RestoreAllHands();
-
-                // Fight winners may have changed vs. the RNG outcome the game used to assign
-                // consolation/skip relics. Recompute those so a flipped winner doesn't also keep the
-                // consolation relic that was originally handed to the (then-)loser.
-                ReassignConsolationPrizes(results);
-
-                // The per-round animator already animated and GRANTED each fought-over relic. Strip
-                // those results so the stock AnimateRelicAwards doesn't re-flash the backstop or
-                // re-grant them; it still fires the begin/finished signals and animates+grants the
-                // single-voter / consolation / skipped relics.
-                if (animator.Available)
-                    results.RemoveAll(r => r.type == RelicPickingResultType.FoughtOver);
+                // The two-argument award path moves the holder beside the backstop.
+                animator = new FightAnimator(collection, reparentHolder: awardArgs.Length == 2, cts.Token);
+                animator.PreFreezeHands();
             }
-            finally
+            catch (Exception e)
             {
-                RpsNetHub.Unregister();
+                animator = null;
+                Entry.Logger.Warn($"[RPS] Could not prepare the hand animations: {e}");
             }
+
+            foreach (var (result, slot) in fights)
+            {
+                if (await InteractiveFightResolver.ResolveFight(result, slot, collection, animator, cts.Token))
+                    granted.Add(result);
+            }
+        }
+        catch (OperationCanceledException) when (cts.IsCancellationRequested)
+        {
+            return;
         }
         catch (Exception e)
         {
-            Entry.Logger.Error($"Interactive relic fight failed, falling back to default animation: {e}");
+            Entry.Logger.Error($"[RPS] Interactive fight failed. Passing remaining awards to the original animation: {e}");
         }
         finally
         {
-            overlayParent.TreeExiting -= OnTreeExiting;
-            cts.Dispose();
+            animator?.EndFight(false);
+            if (GodotObject.IsInstanceValid(collection))
+                collection.TreeExiting -= OnTreeExiting;
+            try
+            {
+                RpsNetHub.Unregister();
+            }
+            catch (Exception e)
+            {
+                Entry.Logger.Warn($"[RPS] Could not unregister the fight message handlers: {e}");
+            }
         }
 
-        // Hand off to the stock animation + relic granting with the (possibly rewritten) results.
+        if (cts.IsCancellationRequested || !GodotObject.IsInstanceValid(collection) || !collection.IsInsideTree())
+            return;
+
         try
         {
-            var task = (Task)AnimateRelicAwardsMethod.Invoke(instance, new object[] { results });
-            if (task != null)
-                await task;
+            ReassignConsolationPrizes(results);
         }
         catch (Exception e)
         {
-            Entry.Logger.Error($"Failed to invoke AnimateRelicAwards: {e}");
+            Entry.Logger.Warn($"[RPS] Could not recompute consolation prizes: {e}");
         }
+        awardArgs[0] = results.Where(result => !granted.Contains(result)).ToList();
+        await (Task)animateAwards.Invoke(collection, awardArgs)!;
     }
 
     /// <summary>
@@ -146,23 +169,16 @@ public static class RelicFightInteractivePatch
     {
         // The leftover-relic pool keeps its existing order (the host's shuffle), taken from the
         // current consolation + skipped results.
-        var pool = new List<RelicModel>();
-        for (var i = results.Count - 1; i >= 0; i--)
-        {
-            var type = results[i].type;
-            if (type != RelicPickingResultType.ConsolationPrize && type != RelicPickingResultType.Skipped) continue;
-            pool.Insert(0, results[i].relic);
-            results.RemoveAt(i);
-        }
+        var pool = results.Where(r => r.type is RelicPickingResultType.ConsolationPrize or RelicPickingResultType.Skipped).ToList();
         if (pool.Count == 0)
             return;
 
         // Winners of decided relics (single-voter + fought-over).
         var winners = new HashSet<Player>();
-        IRunState runState = null;
+        IRunState? runState = null;
         foreach (RelicPickingResult r in results)
         {
-            if (r.player != null)
+            if ((r.type is RelicPickingResultType.OnlyOnePlayerVoted or RelicPickingResultType.FoughtOver) && r.player != null)
             {
                 winners.Add(r.player);
                 runState ??= r.player.RunState;
@@ -186,39 +202,22 @@ public static class RelicFightInteractivePatch
 
         for (var i = 0; i < pool.Count; i++)
         {
-            if (i < recipients.Count)
-            {
-                results.Add(new RelicPickingResult
-                {
-                    type = RelicPickingResultType.ConsolationPrize,
-                    player = recipients[i],
-                    relic = pool[i],
-                });
-                Entry.Logger.Info($"[RPS] consolation relic {pool[i]} -> {recipients[i].NetId}");
-            }
-            else
-            {
-                results.Add(new RelicPickingResult
-                {
-                    type = RelicPickingResultType.Skipped,
-                    player = null,
-                    relic = pool[i],
-                });
-                Entry.Logger.Info($"[RPS] relic {pool[i]} left behind (no recipient)");
-            }
+            var award = pool[i];
+            award.player = i < recipients.Count ? recipients[i] : null;
+            award.type = award.player != null ? RelicPickingResultType.ConsolationPrize : RelicPickingResultType.Skipped;
         }
     }
 
-    private static int IndexOfRelic(IReadOnlyList<RelicModel> relics, RelicModel relic)
+    private static int IndexOfRelic(IReadOnlyList<RelicModel>? relics, RelicModel relic)
     {
         if (relics == null)
-            return 0;
+            return -1;
         for (var i = 0; i < relics.Count; i++)
         {
             if (ReferenceEquals(relics[i], relic))
                 return i;
         }
-        return 0;
+        return -1;
     }
 
     private static void TaskHelperRunSafely(Task task)

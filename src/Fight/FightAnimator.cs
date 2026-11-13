@@ -1,4 +1,3 @@
-using System.Collections;
 using System.Reflection;
 using Godot;
 using HarmonyLib;
@@ -6,6 +5,7 @@ using MegaCrit.Sts2.Core.Commands;
 using MegaCrit.Sts2.Core.Context;
 using MegaCrit.Sts2.Core.Entities.Players;
 using MegaCrit.Sts2.Core.Entities.TreasureRelicPicking;
+using MegaCrit.Sts2.Core.Helpers;
 using MegaCrit.Sts2.Core.Models;
 using MegaCrit.Sts2.Core.Nodes;
 using MegaCrit.Sts2.Core.Nodes.GodotExtensions;
@@ -23,71 +23,37 @@ namespace STS2BetterRockPaperScissors.Fight;
 /// DoLoseShake / GrabRelic, NHandImageCollection.BeforeFightStarted) to reproduce — round by round —
 /// what NHandImageCollection.DoFight + the fight branch of AnimateRelicAwards do in one batch.
 ///
-/// If any reflection handle is missing we degrade gracefully: the animation calls become no-ops and
-/// the caller still resolves winners correctly; the stock end-of-fight replay can act as the visual
-/// fallback.
+/// If the collection fields are unavailable, the caller uses the stock end-of-fight replay.
 /// </summary>
 public sealed class FightAnimator
 {
-    private static readonly Type CollectionType = AccessTools.TypeByName(
-        "MegaCrit.Sts2.Core.Nodes.Screens.TreasureRoomRelic.NTreasureRoomRelicCollection");
-    private static readonly FieldInfo HandsField =
-        CollectionType != null ? AccessTools.Field(CollectionType, "_hands") : null;
-    private static readonly FieldInfo BackstopField =
-        CollectionType != null ? AccessTools.Field(CollectionType, "_fightBackstop") : null;
-    private static readonly FieldInfo HoldersField =
-        CollectionType != null ? AccessTools.Field(CollectionType, "_holdersInUse") : null;
+    private static readonly FieldInfo? HandsField = AccessTools.Field(typeof(NTreasureRoomRelicCollection), "_hands");
+    private static readonly FieldInfo? BackstopField = AccessTools.Field(typeof(NTreasureRoomRelicCollection), "_fightBackstop");
+    private static readonly FieldInfo? HoldersField = AccessTools.Field(typeof(NTreasureRoomRelicCollection), "_holdersInUse");
+    private static readonly FieldInfo? HandListField = AccessTools.Field(typeof(NHandImageCollection), "_hands");
 
-    private readonly object _hands;            // NHandImageCollection
-    private readonly Control _backstop;        // Control ("FightBackstop")
-    private readonly IList _holders;            // List<NTreasureRoomRelicHolder>
-    private readonly IList _handList;           // NHandImageCollection._hands (List<NHandImage>)
+    private readonly NHandImageCollection? _hands;
+    private readonly Control? _backstop;
+    private readonly IReadOnlyList<NTreasureRoomRelicHolder>? _holders;
+    private readonly IReadOnlyList<NHandImage>? _handList;
     private readonly CancellationToken _token;
+    private readonly bool _reparentHolder;
+    private readonly HashSet<Tween> _activeTweens = new();
+    private FightVisuals? _activeFight;
 
-    private Control _activeHolder;      // the relic holder pulled to center for the current fight
-    private bool _fightVisualsActive;   // true between BeginFight and GrabRelicForWinner
+    private sealed record FightVisuals(
+        NTreasureRoomRelicHolder Holder, Node Parent, int SiblingIndex, Vector2 Position, float Rotation, Vector2 Scale,
+        int ZIndex, bool HolderVisible, Color BackstopColor, bool BackstopVisible, List<Player> Fighters);
 
-    private readonly MethodInfo _getHand;       // NHandImageCollection.GetHand(ulong) -> NHandImage
-    private readonly MethodInfo _beforeFight;   // NHandImageCollection.BeforeFightStarted(List<Player>)
-    private readonly MethodInfo _beforeAwarded; // NHandImageCollection.BeforeRelicsAwarded()
-    private readonly MethodInfo _doFightMove;   // NHandImage.DoFightMove(move, float) -> Tween
-    private readonly MethodInfo _doLoseShake;   // NHandImage.DoLoseShake(float) -> Task
-    private readonly MethodInfo _grabRelic;     // NHandImage.GrabRelic(holder) -> Task
-    private readonly MethodInfo _setIsInFight;  // NHandImage.SetIsInFight(bool)
-
-    /// <summary>True when every handle resolved and per-round animation can actually run.</summary>
-    public bool Available { get; }
-
-    public FightAnimator(object collectionInstance, CancellationToken token)
+    public FightAnimator(NTreasureRoomRelicCollection collection, bool reparentHolder, CancellationToken token)
     {
         _token = token;
-        _hands = HandsField?.GetValue(collectionInstance);
-        _backstop = BackstopField?.GetValue(collectionInstance) as Control;
-        _holders = HoldersField?.GetValue(collectionInstance) as IList;
-
+        _reparentHolder = reparentHolder;
+        _hands = HandsField?.GetValue(collection) as NHandImageCollection;
+        _backstop = BackstopField?.GetValue(collection) as Control;
+        _holders = HoldersField?.GetValue(collection) as IReadOnlyList<NTreasureRoomRelicHolder>;
         if (_hands != null)
-        {
-            Type handsType = _hands.GetType();
-            _getHand = AccessTools.Method(handsType, "GetHand");
-            _beforeFight = AccessTools.Method(handsType, "BeforeFightStarted");
-            _beforeAwarded = AccessTools.Method(handsType, "BeforeRelicsAwarded");
-            _handList = AccessTools.Field(handsType, "_hands")?.GetValue(_hands) as IList;
-        }
-
-        Type handType = AccessTools.TypeByName(
-            "MegaCrit.Sts2.Core.Nodes.Screens.TreasureRoomRelic.NHandImage");
-        if (handType != null)
-        {
-            _doFightMove = AccessTools.Method(handType, "DoFightMove");
-            _doLoseShake = AccessTools.Method(handType, "DoLoseShake");
-            _grabRelic = AccessTools.Method(handType, "GrabRelic");
-            _setIsInFight = AccessTools.Method(handType, "SetIsInFight");
-        }
-
-        Available = _hands != null && _backstop != null && _holders != null && _handList != null
-                    && _getHand != null && _beforeFight != null && _beforeAwarded != null
-                    && _doFightMove != null && _doLoseShake != null && _grabRelic != null
-                    && _setIsInFight != null;
+            _handList = HandListField?.GetValue(_hands) as IReadOnlyList<NHandImage>;
     }
 
     /// <summary>
@@ -96,26 +62,21 @@ public sealed class FightAnimator
     /// Uses Node.Visible directly: stock UpdateHandVisibility only toggles the internal IsShown flag +
     /// tween target and never touches Visible, so this stays hidden even if it re-runs mid-pick.
     /// </summary>
-    public void ShowOnlyFighters(List<Player> fighters)
+    private void ShowOnlyFighters(List<Player> fighters)
     {
-        if (!Available)
-            return;
-        foreach (object hand in _handList)
-        {
-            if (hand is NHandImage h)
-                h.Visible = fighters.Contains(h.Player);
-        }
+        foreach (NHandImage hand in _handList!)
+            hand.Visible = fighters.Contains(hand.Player);
     }
 
     /// <summary>Re-show all hands (undoes <see cref="ShowOnlyFighters"/>) for the stock award wrap-up.</summary>
-    public void RestoreAllHands()
+    private void RestoreAllHands()
     {
-        if (!Available)
+        if (_handList == null)
             return;
-        foreach (object hand in _handList)
+        foreach (NHandImage hand in _handList)
         {
-            if (hand is NHandImage h)
-                h.Visible = true;
+            if (GodotObject.IsInstanceValid(hand))
+                hand.Visible = true;
         }
     }
 
@@ -126,8 +87,7 @@ public sealed class FightAnimator
     /// </summary>
     public void PreFreezeHands()
     {
-        if (Available)
-            _beforeAwarded.Invoke(_hands, null);
+        _hands?.BeforeRelicsAwarded();
     }
 
     /// <summary>
@@ -138,35 +98,42 @@ public sealed class FightAnimator
 
     /// <summary>
     /// Fight intro: pull the relic holder to the backstop center, fade the backstop in and flag the
-    /// fighters as in-fight. Mirrors the FoughtOver setup in AnimateRelicAwards
-    /// (NTreasureRoomRelicCollection.cs:298-307). Returns the holder so the caller can pass it back to
-    /// <see cref="GrabRelicForWinner"/>; null if the holder can't be located.
+    /// fighters as in-fight. Returns the holder when the per-round animation can run.
     /// </summary>
-    public async Task<object> BeginFight(RelicModel relic, List<Player> fighters)
+    public async Task<NTreasureRoomRelicHolder?> BeginFight(int slot, RelicModel relic, List<Player> fighters)
     {
-        if (!Available)
+        if (_hands == null || _handList == null || _backstop == null || _holders == null)
             return null;
 
-        object holder = FindHolder(relic);
-        if (holder is not Control holderControl)
+        if (slot >= _holders.Count || !ReferenceEquals(_holders[slot].Relic.Model, relic))
             return null;
 
-        holderControl.ZIndex = 1;
+        NTreasureRoomRelicHolder holder = _holders[slot];
+        _activeFight = new FightVisuals(holder, holder.GetParent(), holder.GetIndex(), holder.Position, holder.Rotation, holder.Scale,
+            holder.ZIndex, holder.Visible, _backstop.Modulate, _backstop.Visible, fighters);
+        if (_reparentHolder)
+        {
+            Node fightLayer = _backstop.GetParent();
+            if (holder.GetParent() != fightLayer)
+                holder.Reparent(fightLayer);
+            fightLayer.MoveChildSafely(holder, _backstop.GetIndex() + 1);
+        }
+        holder.ZIndex = 1;
         _backstop.Visible = true;
-        _activeHolder = holderControl;
-        _fightVisualsActive = true;
 
-        Vector2 target = (_backstop.Size - holderControl.Size) * 0.5f;
-        Tween tween = holderControl.CreateTween();
-        tween.TweenProperty(holderControl, "global_position", target, 0.25)
+        Vector2 target = (_backstop.Size - holder.Size) * 0.5f;
+        Tween tween = holder.CreateTween();
+        _activeTweens.Add(tween);
+        tween.TweenProperty(holder, "global_position", target, 0.25)
             .SetTrans(Tween.TransitionType.Back).SetEase(Tween.EaseType.In);
         tween.TweenProperty(_backstop, "modulate:a", 1f, 0.25);
 
-        _beforeFight.Invoke(_hands, new object[] { fighters });
-        ShowOnlyFighters(fighters); // hide the other fights' frozen hands (the stray "third finger")
+        _hands.BeforeFightStarted(fighters);
+        ShowOnlyFighters(fighters);
 
-        await tween.AwaitFinished(_token);
+        await WaitForTween(tween, holder);
         await Cmd.Wait(1f, _token);
+        _token.ThrowIfCancellationRequested();
         return holder;
     }
 
@@ -181,37 +148,33 @@ public sealed class FightAnimator
         IReadOnlyDictionary<Player, RelicPickingFightMove> moves,
         List<Player> eliminated)
     {
-        if (!Available)
-            return;
-
         float duration = RoundDuration(roundIndex);
 
-        var throwTweens = new List<Task>();
+        var throwTweens = new List<(Tween Tween, NHandImage Hand)>();
         foreach (Player p in survivors)
         {
             if (!moves.TryGetValue(p, out RelicPickingFightMove move))
                 continue;
-            object hand = GetHand(p);
+            NHandImage? hand = _hands!.GetHand(p.NetId);
             if (hand == null)
                 continue;
-            var tween = (Tween)_doFightMove.Invoke(hand, new object[] { move, duration });
-            if (tween != null)
-                throwTweens.Add(tween.AwaitFinished(_token));
+            Tween tween = hand.DoFightMove(move, duration);
+            _activeTweens.Add(tween);
+            throwTweens.Add((tween, hand));
         }
         if (throwTweens.Count > 0)
-            await Task.WhenAll(throwTweens);
+            await Task.WhenAll(throwTweens.Select(t => WaitForTween(t.Tween, t.Hand)));
 
         var shakeTasks = new List<Task>();
         foreach (Player p in eliminated)
         {
-            object hand = GetHand(p);
-            if (hand == null)
-                continue;
-            shakeTasks.Add((Task)_doLoseShake.Invoke(hand, new object[] { Mathf.Max(duration, 0.5f) }));
+            NHandImage? hand = _hands!.GetHand(p.NetId);
+            if (hand != null)
+                shakeTasks.Add(hand.DoLoseShake(Mathf.Max(duration, 0.5f)));
         }
 
         if (shakeTasks.Count > 0)
-            await Task.WhenAll(shakeTasks);
+            await Task.WhenAll(shakeTasks).WaitAsync(_token);
         else
             await Cmd.Wait(duration, _token);
     }
@@ -220,34 +183,78 @@ public sealed class FightAnimator
     /// Fight outro: the winner grabs the relic, the backstop fades out, fighters leave fight state.
     /// Mirrors the tail of DoFight + the backstop fade in AnimateRelicAwards.
     /// </summary>
-    public async Task GrabRelicForWinner(object holder, Player winner, List<Player> fighters)
+    public async Task GrabRelicForWinner(NTreasureRoomRelicHolder holder, Player winner)
     {
-        if (!Available || holder is not Control holderControl)
+        await Cmd.Wait(0.5f, _token);
+        _token.ThrowIfCancellationRequested();
+        NHandImage? winnerHand = _hands!.GetHand(winner.NetId);
+        if (winnerHand == null)
+            throw new InvalidOperationException("The winner's hand is missing.");
+
+        await winnerHand.GrabRelic(holder).WaitAsync(_token);
+        _token.ThrowIfCancellationRequested();
+        if (holder.GetParent() != winnerHand)
+            throw new InvalidOperationException("The winner's hand did not grab the relic.");
+
+        Tween tween = holder.CreateTween();
+        _activeTweens.Add(tween);
+        tween.TweenProperty(_backstop!, "modulate:a", 0f, 0.25);
+        await WaitForTween(tween, holder);
+    }
+
+    public void EndFight(bool grabbed)
+    {
+        if (_activeFight is not { } fight)
+            return;
+        _activeFight = null;
+
+        try
+        {
+            RestoreFightVisuals(fight, grabbed);
+        }
+        catch (Exception e)
+        {
+            Entry.Logger.Warn($"[RPS] Could not restore the fight visuals: {e}");
+        }
+    }
+
+    private void RestoreFightVisuals(FightVisuals fight, bool grabbed)
+    {
+        foreach (Tween tween in _activeTweens.ToArray())
+        {
+            if (GodotObject.IsInstanceValid(tween) && tween.IsValid())
+                tween.Kill();
+        }
+        _activeTweens.Clear();
+        if (_token.IsCancellationRequested)
             return;
 
-        await Cmd.Wait(0.5f, _token);
-        object winnerHand = GetHand(winner);
-        if (winnerHand != null)
+        if (GodotObject.IsInstanceValid(_backstop))
         {
-            var grab = (Task)_grabRelic.Invoke(winnerHand, new object[] { holder });
-            if (grab != null)
-                await grab;
+            _backstop!.Modulate = fight.BackstopColor;
+            _backstop.Visible = fight.BackstopVisible;
         }
-
-        Tween tween = holderControl.CreateTween();
-        tween.TweenProperty(_backstop, "modulate:a", 0f, 0.25);
-        await tween.AwaitFinished(_token);
-        _backstop.Visible = false;
-        holderControl.ZIndex = 0;
-        _fightVisualsActive = false;
-        _activeHolder = null;
-
-        foreach (Player p in fighters)
+        if (GodotObject.IsInstanceValid(fight.Holder))
         {
-            object hand = GetHand(p);
-            if (hand != null)
-                _setIsInFight.Invoke(hand, new object[] { false });
+            fight.Holder.ZIndex = fight.ZIndex;
+            fight.Holder.Visible = fight.HolderVisible;
+            if (!grabbed && GodotObject.IsInstanceValid(fight.Parent))
+            {
+                if (fight.Holder.GetParent() != fight.Parent)
+                    fight.Holder.Reparent(fight.Parent);
+                fight.Parent.MoveChild(fight.Holder, fight.SiblingIndex);
+                fight.Holder.Position = fight.Position;
+                fight.Holder.Rotation = fight.Rotation;
+                fight.Holder.Scale = fight.Scale;
+            }
         }
+        foreach (Player player in fight.Fighters)
+        {
+            NHandImage? hand = _hands!.GetHand(player.NetId);
+            if (GodotObject.IsInstanceValid(hand))
+                hand!.SetIsInFight(false);
+        }
+        RestoreAllHands();
     }
 
     /// <summary>
@@ -258,50 +265,68 @@ public sealed class FightAnimator
     /// </summary>
     public void SyncPauseVisibility()
     {
-        if (!Available || !_fightVisualsActive)
+        if (_activeFight is not { } fight)
             return;
         bool paused = GamePauseState.IsMenuOpen;
-        _backstop.Visible = !paused;
-        if (GodotObject.IsInstanceValid(_activeHolder))
-            _activeHolder.Visible = !paused;
+        _backstop!.Visible = !paused;
+        if (GodotObject.IsInstanceValid(fight.Holder))
+            fight.Holder.Visible = !paused;
     }
 
     /// <summary>
     /// Grant a fought-over relic to its winner now that its fight is animated, mirroring the grant
     /// loop in AnimateRelicAwards (NTreasureRoomRelicCollection.cs:330-349) for this single relic.
     /// </summary>
-    public void GrantRelic(RelicModel relic, Player winner, IRunState runState, object holder)
+    public bool GrantRelic(RelicModel relic, Player winner, IRunState runState, NTreasureRoomRelicHolder holder)
     {
         RelicModel mutable = relic.ToMutable();
-        var holderControl = holder as NTreasureRoomRelicHolder;
-        holderControl?.Disable();
-
         TaskHelperRunSafely(RelicCmd.Obtain(mutable, winner));
+        // Obtain adds the relic before its first await on both branches. If a later effect fails,
+        // handing this entry back to the game would grant the same relic again.
+        if (!winner.Relics.Contains(mutable))
+            return false;
 
-        if (LocalContext.IsMe(winner) && holderControl != null)
+        try
         {
-            NRun.Instance?.GlobalUi.RelicInventory.AnimateRelic(
-                mutable, holderControl.GlobalPosition, holderControl.Scale);
+            foreach (Player player in runState.Players)
+            {
+                if (player != winner)
+                    player.RelicGrabBag.MoveToFallback(relic);
+            }
+            if (LocalContext.IsMe(winner))
+                NRun.Instance?.GlobalUi.RelicInventory.AnimateRelic(mutable, holder.GlobalPosition, holder.Scale);
+            holder.AnimateAwayVotes();
         }
-
-        foreach (var p in runState.Players)
+        catch (Exception e)
         {
-            if (p != winner)
-                p.RelicGrabBag.MoveToFallback(relic);
+            Entry.Logger.Warn($"[RPS] Relic was granted but award cleanup failed: {e}");
         }
+        return true;
     }
 
-    private object FindHolder(RelicModel relic)
+    private async Task WaitForTween(Tween tween, Node owner)
     {
-        foreach (var holder in _holders)
+        bool finished = false;
+        void OnFinished() => finished = true;
+        tween.Finished += OnFinished;
+        try
         {
-            if (holder is NTreasureRoomRelicHolder h && ReferenceEquals(h.Relic.Model, relic))
-                return holder;
-        }
-        return null;
-    }
+            // Godot does not emit Finished when a tween is killed. Poll validity once per frame
+            // and use the shared node helper to end the wait if the owner leaves the tree.
+            while (!finished && GodotObject.IsInstanceValid(tween) && tween.IsValid())
+                await owner.AwaitProcessFrame(_token);
 
-    private object GetHand(Player player) => _getHand.Invoke(_hands, new object[] { player.NetId });
+            _token.ThrowIfCancellationRequested();
+            if (!finished)
+                throw new InvalidOperationException("A relic fight tween stopped before it finished.");
+            _activeTweens.Remove(tween);
+        }
+        finally
+        {
+            if (GodotObject.IsInstanceValid(tween))
+                tween.Finished -= OnFinished;
+        }
+    }
 
     private static void TaskHelperRunSafely(Task task)
     {
